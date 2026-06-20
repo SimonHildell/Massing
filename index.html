@@ -1,0 +1,1468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Finch Massing</title>
+<style>
+  :root{
+    --bg: #eef0f3;
+    --panel: #ffffff;
+    --panel-2: #f0f2f5;
+    --hairline: #dde0e5;
+    --text: #1d2127;
+    --text-dim: #6b7280;
+    --accent: #2f7fd6;
+    --accent-dim: rgba(47,127,214,0.10);
+    --danger: #dc4444;
+    --amber: #c9821f;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "IBM Plex Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+  }
+  *{ box-sizing: border-box; }
+  html, body{
+    margin:0; padding:0; height:100%; width:100%;
+    background:var(--bg); color:var(--text);
+    font-family:var(--sans);
+    overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  #app{
+    display:flex; flex-direction:column; height:100vh; width:100vw;
+  }
+
+  /* ---------- Toolbar ---------- */
+  #toolbar{
+    height:56px; flex:0 0 56px;
+    display:flex; align-items:center; gap:6px;
+    padding:0 14px;
+    background:var(--panel);
+    border-bottom:1px solid var(--hairline);
+    z-index:10;
+  }
+  .brand{
+    display:flex; flex-direction:column; line-height:1.05; margin-right:18px; user-select:none;
+  }
+  .brand b{ font-size:13px; letter-spacing:0.04em; color:var(--text); }
+  .brand span{ font-size:10px; letter-spacing:0.08em; color:var(--text-dim); text-transform:uppercase; }
+
+  .toolgroup{ display:flex; align-items:center; gap:4px; padding:0 8px; }
+  .divider{ width:1px; height:28px; background:var(--hairline); margin:0 4px; }
+
+  .tool, .iconbtn{
+    display:flex; align-items:center; gap:7px;
+    height:36px; padding:0 12px;
+    background:transparent; border:1px solid transparent; border-radius:7px;
+    color:var(--text-dim); font-family:var(--sans); font-size:12.5px; font-weight:500;
+    cursor:pointer; transition:background .12s ease, color .12s ease, border-color .12s ease;
+    white-space:nowrap;
+  }
+  .tool svg, .iconbtn svg{ width:17px; height:17px; flex:0 0 auto; }
+  .tool:hover:not(:disabled), .iconbtn:hover:not(:disabled){ background:var(--panel-2); color:var(--text); }
+  .tool--active{ background:var(--accent-dim); color:var(--accent); border-color:rgba(47,127,214,0.35); }
+  .tool:disabled, .iconbtn:disabled{ opacity:0.32; cursor:not-allowed; }
+  .tool:disabled:hover{ background:transparent; color:var(--text-dim); }
+
+  #toolbar-spacer{ flex:1; }
+
+  /* ---------- Viewport ---------- */
+  #viewport-container{ position:relative; flex:1; min-height:0; }
+  #viewport{ position:absolute; inset:0; display:block; width:100%; height:100%; touch-action:none; }
+
+  .corner{ position:absolute; width:18px; height:18px; border-color:rgba(47,127,214,0.4); pointer-events:none; }
+  .corner--tl{ top:14px; left:14px; border-top:1.5px solid; border-left:1.5px solid; }
+  .corner--tr{ top:14px; right:14px; border-top:1.5px solid; border-right:1.5px solid; }
+  .corner--bl{ bottom:14px; left:14px; border-bottom:1.5px solid; border-left:1.5px solid; }
+  .corner--br{ bottom:14px; right:14px; border-bottom:1.5px solid; border-right:1.5px solid; }
+
+  /* ---------- Status strip (bottom-left) ---------- */
+  #status-bar{
+    position:absolute; left:14px; bottom:14px; right:200px;
+    display:flex; align-items:center; gap:8px;
+    pointer-events:none;
+  }
+  #status-text{
+    pointer-events:auto;
+    background:rgba(255,255,255,0.88); backdrop-filter:blur(6px);
+    border:1px solid var(--hairline);
+    color:var(--text-dim); font-size:12.5px;
+    padding:9px 14px; border-radius:9px;
+    max-width:560px;
+    box-shadow:0 4px 16px rgba(15,23,42,0.06);
+  }
+  .status--danger{ color:var(--danger); border-color:rgba(220,68,68,0.4); }
+
+  /* ---------- HUD (measurements readout, bottom-right) — signature element ---------- */
+  #hud{
+    position:absolute; right:14px; bottom:14px;
+    background:rgba(255,255,255,0.96);
+    border:1px solid rgba(47,127,214,0.3);
+    border-radius:9px;
+    padding:9px 16px;
+    min-width:128px;
+    text-align:right;
+    opacity:0; transform:translateY(4px);
+    transition:opacity .12s ease, transform .12s ease;
+    box-shadow:0 8px 24px rgba(15,23,42,0.10);
+  }
+  #hud.hud--visible{ opacity:1; transform:translateY(0); }
+  #hud.hud--invalid{ border-color:rgba(220,68,68,0.55); }
+  #hud.hud--invalid #hud-value{ color:var(--danger); }
+  #hud-label{ font-size:9.5px; letter-spacing:0.12em; text-transform:uppercase; color:var(--text-dim); margin-bottom:2px; }
+  #hud-value{
+    font-family:var(--mono); font-size:19px; font-weight:600; color:var(--accent);
+    letter-spacing:0.01em;
+  }
+
+  /* ---------- Empty state ---------- */
+  #empty-state{
+    position:absolute; left:50%; top:46%; transform:translate(-50%,-50%);
+    text-align:center; pointer-events:none;
+    opacity:0; transition:opacity .25s ease;
+  }
+  #empty-state.empty--visible{ opacity:1; }
+  #empty-state h2{ margin:0 0 6px; font-size:15px; font-weight:600; color:var(--text); letter-spacing:0.01em; }
+  #empty-state p{ margin:0; font-size:12.5px; color:var(--text-dim); }
+  #empty-state kbd{
+    font-family:var(--mono); font-size:11px; background:var(--panel-2);
+    border:1px solid var(--hairline); border-radius:4px; padding:1px 6px; color:var(--accent);
+  }
+  .cam-hint{ font-size:11px; color:var(--text-dim); white-space:nowrap; margin-right:4px; }
+  .cam-hint b{ color:var(--text); font-weight:600; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="toolbar">
+    <div class="brand"><b>Finch Massing</b><span>3D Editor — Demo</span></div>
+
+    <div class="toolgroup">
+      <button class="tool" data-mode="draw" title="Draw — sketch a footprint, it extrudes on close">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="4" cy="15" r="1.6" fill="currentColor" stroke="none"/>
+          <circle cx="9" cy="5" r="1.6" fill="currentColor" stroke="none"/>
+          <circle cx="16" cy="9" r="1.6" fill="currentColor" stroke="none"/>
+          <path d="M4 15 L9 5 L16 9"/>
+          <path d="M16 9 L4 15" stroke-dasharray="1.5 2.2" opacity="0.55"/>
+        </svg>
+        Draw
+      </button>
+      <button class="tool" data-mode="move" title="Move — drag corners, walls, or whole volumes">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 2.5 L10 17.5 M2.5 10 L17.5 10"/>
+          <path d="M10 2.5 L7.3 5.2 M10 2.5 L12.7 5.2"/>
+          <path d="M10 17.5 L7.3 14.8 M10 17.5 L12.7 14.8"/>
+          <path d="M2.5 10 L5.2 7.3 M2.5 10 L5.2 12.7"/>
+          <path d="M17.5 10 L14.8 7.3 M17.5 10 L14.8 12.7"/>
+        </svg>
+        Move
+      </button>
+      <button class="tool" data-mode="pushpull" title="Push/Pull — extrude any face along its normal">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="5" y="7" width="10" height="9" rx="0.5"/>
+          <path d="M10 1.5 L10 6 M7.6 3.6 L10 1.5 L12.4 3.6"/>
+        </svg>
+        Push/Pull
+      </button>
+      <button class="tool" data-mode="split" disabled title="Split faces — coming in the next pass">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="4" width="12" height="12" rx="0.5"/>
+          <path d="M4 13 L16 7" stroke-dasharray="1.6 2"/>
+        </svg>
+        Split
+      </button>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="toolgroup">
+      <button class="iconbtn" id="btn-undo" title="Undo (Ctrl/Cmd+Z)">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8 L5 4 M5 8 L9 8 M5 8 C8 4 15 5 15 11 C15 15.5 10.5 17.5 6.5 15.5"/></svg>
+      </button>
+      <button class="iconbtn" id="btn-redo" title="Redo (Ctrl/Cmd+Shift+Z)">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 8 L15 4 M15 8 L11 8 M15 8 C12 4 5 5 5 11 C5 15.5 9.5 17.5 13.5 15.5"/></svg>
+      </button>
+      <button class="iconbtn" id="btn-delete" title="Delete selected volume (Del)">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6 L15 6 M8 6 L8.5 3.5 L11.5 3.5 L12 6 M6.5 6 L7 16 L13 16 L13.5 6"/></svg>
+      </button>
+    </div>
+
+    <div id="toolbar-spacer"></div>
+
+    <div class="toolgroup">
+      <span class="cam-hint"><b>Middle-drag</b> pan · <b>Shift+Middle-drag</b> orbit · <b>Scroll</b> zoom</span>
+      <button class="iconbtn" id="btn-reset-view" title="Reset view">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4 a6 6 0 1 1 -5.6 3.9"/><path d="M4 4 L4 8 L8 8"/></svg>
+        Reset View
+      </button>
+    </div>
+  </div>
+
+  <div id="viewport-container">
+    <canvas id="viewport"></canvas>
+
+    <div class="corner corner--tl"></div>
+    <div class="corner corner--tr"></div>
+    <div class="corner corner--bl"></div>
+    <div class="corner corner--br"></div>
+
+    <div id="empty-state">
+      <h2>Sketch your first volume</h2>
+      <p>Click in the viewport to place footprint points — on the ground or on an existing face. Close the shape near its start to extrude it.</p>
+    </div>
+
+    <div id="status-bar">
+      <div id="status-text">Click to place the first point. Snaps to existing vertices and faces.</div>
+    </div>
+
+    <div id="hud">
+      <div id="hud-label">Length</div>
+      <div id="hud-value">0.00 m</div>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ============================================================
+   Finch Massing — standalone 3D massing editor (demo)
+   Vanilla JS + Three.js r128. No build step, no framework.
+
+   ARCHITECTURE NOTE FOR REUSE IN FINCH:
+   `masses[]` is the single source of truth, fully decoupled from
+   the Three.js scene graph. Each mass is a 2D polygon sketched on
+   an oriented plane, then extruded along that plane's normal:
+       { id, plane:{origin,normal,u,v}, points:[{x,z}], depth }
+   For a mass drawn on the ground, plane = {origin:(0,0,0),
+   normal:(0,1,0), u:(1,0,0), v:(0,0,1)} — so points.x/z ARE world
+   x/z and depth IS height, exactly like a simple footprint+height
+   model. A mass drawn on an existing face just uses a different
+   plane; all the same math (triangulation, push/pull, move-drag)
+   applies unchanged because it's written in the plane's local
+   (x,z) coordinates, not world space. This is what lets "draw on
+   any face" and "push/pull any face" share one code path.
+   ============================================================ */
+
+(function () {
+  'use strict';
+
+  /* ---------------- CONFIG ---------------- */
+  const CONFIG = {
+    gridSnap: 0.25,
+    defaultDepth: 3,
+    minDepth: 0.3,
+    minEdgeLength: 0.15,
+    minArea: 0.5,
+    closeThresholdPx: 18,
+    dragThresholdPx: 4,
+    vertexSnapPx: 16,
+    snapPx: 14,
+    handleRadius: 0.15,
+  };
+
+  const COLORS = {
+    massFill: 0xb7c0cf,
+    massFillSelected: 0xf1d8a6,
+    edgeLine: 0x2b313b,
+    accent: 0x2f7fd6,
+    danger: 0xdc4444,
+    handle: 0x2b313b,
+  };
+
+  /* ---------------- THREE / SCENE GLOBALS ---------------- */
+  let scene, camera, renderer, raycaster, container, canvas;
+  const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const mouseNDC = new THREE.Vector2();
+  let lastClientX = 0, lastClientY = 0;
+
+  /* ---------------- DATA MODEL ---------------- */
+  let masses = [];   // { id, plane:{origin,normal,u,v}, points:[{x,z}], depth }
+  let nextId = 1;
+
+  /* ---------------- SCENE-GRAPH CACHE ---------------- */
+  const massViews = new Map(); // massId -> {group,mesh,edges,faceMap,topHandles,botHandles}
+
+  /* ---------------- APP STATE ---------------- */
+  let mode = 'draw'; // 'draw' | 'move' | 'pushpull' | 'split'
+
+  const camState = {
+    radius: 46, theta: Math.PI * 0.22, phi: 1.02,
+    target: new THREE.Vector3(0, 1.2, 0),
+    minR: 6, maxR: 220,
+  };
+  let isOrbiting = false, isPanning = false, lastPx = 0, lastPy = 0;
+
+  const drawState = {
+    active: false,
+    points: [],            // [{world:{x,y,z}}]
+    planeCandidates: null, // array of full plane objects, narrows as points are added
+    markerGroup: null,
+    previewLine: null,
+    committedLine: null,
+    typed: '',
+    _candidate: null,
+    _willClose: false,
+  };
+
+  const moveState = {
+    downHit: null, dragging: false,
+    dragPlane: null, dragStartLocal: null, dragStartScreen: null,
+    dragOriginalPoints: null,
+    selectedMassId: null,
+  };
+
+  const ppState = {
+    active: false, dragging: false,
+    massId: null, faceType: null, edgeIndex: null,
+    normal: null, origin: null,
+    originalPoints: null, originalDepth: null, originalPlaneOrigin: null,
+    typed: '', liveDelta: 0,
+    downScreen: null,
+  };
+
+  let undoStack = [], redoStack = [];
+  let dom = {};
+
+  /* ============================================================
+     SMALL 3D VECTOR HELPERS (plain {x,y,z} objects, framework-free)
+     ============================================================ */
+  function vAdd(a, b) { return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }; }
+  function vSub(a, b) { return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }; }
+  function vScale(a, s) { return { x: a.x * s, y: a.y * s, z: a.z * s }; }
+  function vDot(a, b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+  function vNormalize(a) { const l = Math.hypot(a.x, a.y, a.z) || 1; return { x: a.x / l, y: a.y / l, z: a.z / l }; }
+
+  /* ============================================================
+     PLANE MATH — the core abstraction that lets masses live on
+     any face (ground, a stacked-on top, or a wall).
+     ============================================================ */
+  function planeToWorld(plane, x, z, extra) {
+    extra = extra || 0;
+    return {
+      x: plane.origin.x + x * plane.u.x + z * plane.v.x + extra * plane.normal.x,
+      y: plane.origin.y + x * plane.u.y + z * plane.v.y + extra * plane.normal.y,
+      z: plane.origin.z + x * plane.u.z + z * plane.v.z + extra * plane.normal.z,
+    };
+  }
+  function worldToPlaneXZ(plane, worldPt) {
+    const d = vSub(worldPt, plane.origin);
+    return { x: vDot(d, plane.u), z: vDot(d, plane.v) };
+  }
+  function capPlaneOf(mass, originWorld) {
+    return { origin: { ...originWorld }, normal: { ...mass.plane.normal }, u: { ...mass.plane.u }, v: { ...mass.plane.v } };
+  }
+  function wallNormal2D(points, i) {
+    const n = points.length;
+    const p = points[i], q = points[(i + 1) % n];
+    const dx = q.x - p.x, dz = q.z - p.z;
+    const len = Math.hypot(dx, dz) || 1;
+    return { x: dz / len, z: -dx / len };
+  }
+  function wallOutwardNormal3D(mass, edgeIndex) {
+    const n2d = wallNormal2D(mass.points, edgeIndex);
+    const U = mass.plane.u, V = mass.plane.v;
+    return vNormalize({ x: n2d.x * U.x + n2d.z * V.x, y: n2d.x * U.y + n2d.z * V.y, z: n2d.x * U.z + n2d.z * V.z });
+  }
+  function wallPlaneFromMass(mass, edgeIndex, originWorld) {
+    const n = mass.points.length;
+    const p = mass.points[edgeIndex], q = mass.points[(edgeIndex + 1) % n];
+    const outward = wallOutwardNormal3D(mass, edgeIndex);
+    const pWorld = planeToWorld(mass.plane, p.x, p.z, 0);
+    const qWorld = planeToWorld(mass.plane, q.x, q.z, 0);
+    const edgeDir = vNormalize(vSub(qWorld, pWorld));
+    return { origin: { ...originWorld }, normal: outward, u: edgeDir, v: { ...mass.plane.normal } };
+  }
+  function round3(v) { return Math.round(v * 1000) / 1000; }
+  function planeKey(plane) {
+    let n = plane.normal;
+    let d = vDot(n, plane.origin);
+    let flip = Math.abs(n.x) > 1e-6 ? n.x < 0 : (Math.abs(n.y) > 1e-6 ? n.y < 0 : n.z < 0);
+    if (flip) { n = vScale(n, -1); d = -d; }
+    return { nx: round3(n.x), ny: round3(n.y), nz: round3(n.z), d: round3(d) };
+  }
+  function planesEqual(p1, p2) {
+    const k1 = planeKey(p1), k2 = planeKey(p2);
+    return Math.abs(k1.nx - k2.nx) < 0.01 && Math.abs(k1.ny - k2.ny) < 0.01 &&
+           Math.abs(k1.nz - k2.nz) < 0.01 && Math.abs(k1.d - k2.d) < 0.02;
+  }
+  function groundPlaneFull(originWorld) {
+    return { origin: { ...originWorld }, normal: { x: 0, y: 1, z: 0 }, u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 0, z: 1 } };
+  }
+
+  /* ============================================================
+     2D POLYGON MATH — pure, plane-agnostic (operates on local x,z)
+     ============================================================ */
+  function snap(v, step) { return Math.round(v / step) * step; }
+
+  function signedArea(points) {
+    let a = 0;
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i], q = points[(i + 1) % points.length];
+      a += p.x * q.z - q.x * p.z;
+    }
+    return a / 2;
+  }
+  function ensureCCW(points) { return signedArea(points) < 0 ? points.slice().reverse() : points.slice(); }
+  function dist2D(a, b) { return Math.hypot(a.x - b.x, a.z - b.z); }
+
+  function segmentsIntersect(a1, a2, b1, b2) {
+    function cross(o, p, q) { return (p.x - o.x) * (q.z - o.z) - (p.z - o.z) * (q.x - o.x); }
+    const d1 = cross(b1, b2, a1), d2 = cross(b1, b2, a2);
+    const d3 = cross(a1, a2, b1), d4 = cross(a1, a2, b2);
+    return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+  }
+
+  function isSimplePolygon(points) {
+    const n = points.length;
+    if (n < 3) return false;
+    if (Math.abs(signedArea(points)) < CONFIG.minArea) return false;
+    for (let i = 0; i < n; i++) {
+      if (dist2D(points[i], points[(i + 1) % n]) < CONFIG.minEdgeLength) return false;
+    }
+    for (let i = 0; i < n; i++) {
+      const a1 = points[i], a2 = points[(i + 1) % n];
+      for (let j = i + 1; j < n; j++) {
+        const shareVertex = (j + 1) % n === i || j === (i + 1) % n;
+        if (shareVertex) continue;
+        if (segmentsIntersect(a1, a2, points[j], points[(j + 1) % n])) return false;
+      }
+    }
+    return true;
+  }
+
+  function triangulatePolygon(points) {
+    const idx = points.map((_, i) => i);
+    const tris = [];
+    function cross(a, b, c) { return (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x); }
+    function sign(p1, p2, p3) { return (p1.x - p3.x) * (p2.z - p3.z) - (p2.x - p3.x) * (p1.z - p3.z); }
+    function pointInTri(p, a, b, c) {
+      const d1 = sign(p, a, b), d2 = sign(p, b, c), d3 = sign(p, c, a);
+      const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+      const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+      return !(hasNeg && hasPos);
+    }
+    let guard = 0;
+    while (idx.length > 3 && guard < 5000) {
+      guard++;
+      let earFound = false;
+      for (let i = 0; i < idx.length; i++) {
+        const i0 = idx[(i - 1 + idx.length) % idx.length];
+        const i1 = idx[i];
+        const i2 = idx[(i + 1) % idx.length];
+        const a = points[i0], b = points[i1], c = points[i2];
+        if (cross(a, b, c) <= 1e-9) continue;
+        let containsOther = false;
+        for (let k = 0; k < idx.length; k++) {
+          const ik = idx[k];
+          if (ik === i0 || ik === i1 || ik === i2) continue;
+          if (pointInTri(points[ik], a, b, c)) { containsOther = true; break; }
+        }
+        if (containsOther) continue;
+        tris.push([i0, i1, i2]);
+        idx.splice(i, 1);
+        earFound = true;
+        break;
+      }
+      if (!earFound) break;
+    }
+    if (idx.length === 3) tris.push([idx[0], idx[1], idx[2]]);
+    return tris;
+  }
+
+  /* ============================================================
+     GEOMETRY BUILD — mass (plane + local points + depth) -> mesh
+     ============================================================ */
+  function buildMassGeometry(mass) {
+    const points = ensureCCW(mass.points);
+    const n = points.length;
+    const tris = triangulatePolygon(points);
+    const positions = [];
+    const faceMap = [];
+    function P(x, z, extra) { const w = planeToWorld(mass.plane, x, z, extra); return [w.x, w.y, w.z]; }
+    function pushTri(a, b, c) { positions.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]); }
+
+    tris.forEach(([a, b, c]) => {
+      pushTri(P(points[a].x, points[a].z, 0), P(points[b].x, points[b].z, 0), P(points[c].x, points[c].z, 0));
+      faceMap.push({ type: 'bottom' });
+    });
+    tris.forEach(([a, b, c]) => {
+      pushTri(P(points[a].x, points[a].z, mass.depth), P(points[c].x, points[c].z, mass.depth), P(points[b].x, points[b].z, mass.depth));
+      faceMap.push({ type: 'top' });
+    });
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const B0 = P(points[i].x, points[i].z, 0), B1 = P(points[j].x, points[j].z, 0);
+      const T0 = P(points[i].x, points[i].z, mass.depth), T1 = P(points[j].x, points[j].z, mass.depth);
+      pushTri(B1, B0, T0); faceMap.push({ type: 'wall', edgeIndex: i });
+      pushTri(B1, T0, T1); faceMap.push({ type: 'wall', edgeIndex: i });
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.computeVertexNormals();
+    return { geometry: geo, faceMap, orderedPoints: points };
+  }
+
+  /* ============================================================
+     SCENE-GRAPH SYNC
+     ============================================================ */
+  function ensureMassView(mass) {
+    let view = massViews.get(mass.id);
+    if (!view) {
+      const group = new THREE.Group();
+      const material = new THREE.MeshStandardMaterial({ color: COLORS.massFill, roughness: 0.92, metalness: 0.0, flatShading: true });
+      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), material);
+      mesh.userData.massId = mass.id;
+      const edges = new THREE.LineSegments(
+        new THREE.BufferGeometry(),
+        new THREE.LineBasicMaterial({ color: COLORS.edgeLine, transparent: true, opacity: 0.55 })
+      );
+      group.add(mesh, edges);
+      scene.add(group);
+      view = { group, mesh, edges, faceMap: [], topHandles: [], botHandles: [] };
+      massViews.set(mass.id, view);
+    }
+    return view;
+  }
+
+  function rebuildMassGeometry(mass) {
+    const view = ensureMassView(mass);
+    const { geometry, faceMap, orderedPoints } = buildMassGeometry(mass);
+    mass.points = orderedPoints;
+    view.mesh.geometry.dispose();
+    view.mesh.geometry = geometry;
+    view.faceMap = faceMap;
+    view.edges.geometry.dispose();
+    view.edges.geometry = new THREE.EdgesGeometry(geometry, 25);
+    view.mesh.material.color.setHex(mass.id === moveState.selectedMassId ? COLORS.massFillSelected : COLORS.massFill);
+    refreshHandles(mass);
+  }
+
+  function refreshHandles(mass) {
+    const view = ensureMassView(mass);
+    view.topHandles.forEach(h => view.group.remove(h));
+    view.botHandles.forEach(h => view.group.remove(h));
+    view.topHandles = []; view.botHandles = [];
+    if (mode !== 'move' || mass.id !== moveState.selectedMassId) return;
+    const geo = new THREE.SphereGeometry(CONFIG.handleRadius, 12, 10);
+    mass.points.forEach((p) => {
+      const top = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: COLORS.handle }));
+      const w1 = planeToWorld(mass.plane, p.x, p.z, mass.depth);
+      top.position.set(w1.x, w1.y, w1.z);
+      view.group.add(top); view.topHandles.push(top);
+      const bot = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: COLORS.handle }));
+      const w0 = planeToWorld(mass.plane, p.x, p.z, 0);
+      bot.position.set(w0.x, w0.y, w0.z);
+      view.group.add(bot); view.botHandles.push(bot);
+    });
+  }
+
+  function removeMassView(massId) {
+    const view = massViews.get(massId);
+    if (!view) return;
+    scene.remove(view.group);
+    view.mesh.geometry.dispose(); view.mesh.material.dispose();
+    view.edges.geometry.dispose(); view.edges.material.dispose();
+    massViews.delete(massId);
+  }
+
+  function syncAllViews() {
+    masses.forEach(rebuildMassGeometry);
+    [...massViews.keys()].forEach(id => { if (!masses.find(m => m.id === id)) removeMassView(id); });
+  }
+
+  /* ============================================================
+     UNDO / REDO
+     ============================================================ */
+  function cloneMassData(m) {
+    return {
+      id: m.id, depth: m.depth,
+      plane: { origin: { ...m.plane.origin }, normal: { ...m.plane.normal }, u: { ...m.plane.u }, v: { ...m.plane.v } },
+      points: m.points.map(p => ({ x: p.x, z: p.z })),
+    };
+  }
+  function snapshotMasses() { return masses.map(cloneMassData); }
+  function applySnapshot(snap) {
+    masses = snap.map(cloneMassData);
+    moveState.selectedMassId = null;
+    syncAllViews();
+    updateDeleteButton();
+  }
+  function pushUndo() {
+    undoStack.push(snapshotMasses());
+    if (undoStack.length > 60) undoStack.shift();
+    redoStack = [];
+    updateHistoryButtons();
+  }
+  function undo() { if (!undoStack.length) return; redoStack.push(snapshotMasses()); applySnapshot(undoStack.pop()); updateHistoryButtons(); }
+  function redo() { if (!redoStack.length) return; undoStack.push(snapshotMasses()); applySnapshot(redoStack.pop()); updateHistoryButtons(); }
+  function updateHistoryButtons() { dom.undoBtn.disabled = undoStack.length === 0; dom.redoBtn.disabled = redoStack.length === 0; }
+
+  /* ============================================================
+     CAMERA
+     ============================================================ */
+  function updateCameraPosition() {
+    const { radius, theta, phi, target } = camState;
+    const x = target.x + radius * Math.sin(phi) * Math.sin(theta);
+    const y = target.y + radius * Math.cos(phi);
+    const z = target.z + radius * Math.sin(phi) * Math.cos(theta);
+    camera.position.set(x, y, z);
+    camera.lookAt(target);
+  }
+  function resetView() {
+    camState.radius = 46; camState.theta = Math.PI * 0.22; camState.phi = 1.02;
+    camState.target.set(0, 1.2, 0);
+    updateCameraPosition();
+  }
+
+  /* ============================================================
+     RAYCAST / PICK HELPERS
+     ============================================================ */
+  function setMouseNDC(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    mouseNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    mouseNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    lastClientX = clientX; lastClientY = clientY;
+  }
+  function worldToScreen(x, y, z) {
+    const v = new THREE.Vector3(x, y, z).project(camera);
+    const rect = canvas.getBoundingClientRect();
+    return { x: rect.left + (v.x * 0.5 + 0.5) * rect.width, y: rect.top + (-v.y * 0.5 + 0.5) * rect.height };
+  }
+  function intersectMousePlane(planeObj) {
+    raycaster.setFromCamera(mouseNDC, camera);
+    const thPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+      new THREE.Vector3(planeObj.normal.x, planeObj.normal.y, planeObj.normal.z),
+      new THREE.Vector3(planeObj.origin.x, planeObj.origin.y, planeObj.origin.z)
+    );
+    const out = new THREE.Vector3();
+    return raycaster.ray.intersectPlane(thPlane, out) ? { x: out.x, y: out.y, z: out.z } : null;
+  }
+  function rawSceneHit() {
+    raycaster.setFromCamera(mouseNDC, camera);
+    const meshes = [...massViews.values()].map(v => v.mesh);
+    const meshHits = raycaster.intersectObjects(meshes, false);
+    const groundOut = new THREE.Vector3();
+    const groundOk = raycaster.ray.intersectPlane(groundPlane, groundOut);
+    const groundDist = groundOk ? raycaster.ray.origin.distanceTo(groundOut) : Infinity;
+    const meshDist = meshHits.length ? meshHits[0].distance : Infinity;
+    if (meshHits.length && meshDist < groundDist) {
+      const hit = meshHits[0];
+      const view = massViews.get(hit.object.userData.massId);
+      const info = view.faceMap[hit.faceIndex];
+      return { kind: 'mass', point: { x: hit.point.x, y: hit.point.y, z: hit.point.z }, massId: hit.object.userData.massId, faceInfo: info };
+    } else if (groundOk) {
+      return { kind: 'ground', point: { x: groundOut.x, y: groundOut.y, z: groundOut.z } };
+    }
+    return null;
+  }
+  function pickFace() {
+    raycaster.setFromCamera(mouseNDC, camera);
+    const meshes = [...massViews.values()].map(v => v.mesh);
+    const hits = raycaster.intersectObjects(meshes, false);
+    if (!hits.length) return null;
+    const hit = hits[0];
+    const view = massViews.get(hit.object.userData.massId);
+    const info = view.faceMap[hit.faceIndex];
+    return { massId: hit.object.userData.massId, point: { x: hit.point.x, y: hit.point.y, z: hit.point.z }, ...info };
+  }
+  // screen-space nearest-vertex picker — reliable at any zoom/angle, unlike raycasting tiny spheres
+  function nearestVertexOnScreen(maxPx, filterFn) {
+    let best = null, bestDist = Infinity;
+    masses.forEach(mass => {
+      mass.points.forEach((p, i) => {
+        [0, mass.depth].forEach(extra => {
+          const w = planeToWorld(mass.plane, p.x, p.z, extra);
+          const entry = { massId: mass.id, pointIndex: i, level: extra === 0 ? 'near' : 'far', world: w };
+          if (filterFn && !filterFn(entry)) return;
+          const s = worldToScreen(w.x, w.y, w.z);
+          const d = Math.hypot(s.x - lastClientX, s.y - lastClientY);
+          if (d < bestDist) { bestDist = d; best = entry; }
+        });
+      });
+    });
+    return (best && bestDist <= maxPx) ? best : null;
+  }
+  function planesForVertex(entry) {
+    const mass = masses.find(m => m.id === entry.massId);
+    if (!mass) return [];
+    const n = mass.points.length;
+    const i = entry.pointIndex;
+    const prevI = (i - 1 + n) % n;
+    const planes = [capPlaneOf(mass, entry.world), wallPlaneFromMass(mass, prevI, entry.world), wallPlaneFromMass(mass, i, entry.world)];
+    if (Math.abs(entry.world.y) < 1e-4) planes.push(groundPlaneFull(entry.world));
+    return planes;
+  }
+  // once a sketch plane is partially/fully chosen, prefer hitting real geometry
+  // that matches a candidate; fall back to math-intersecting the candidate plane
+  function constrainedHit(candidates) {
+    raycaster.setFromCamera(mouseNDC, camera);
+    const meshes = [...massViews.values()].map(v => v.mesh);
+    const meshHits = raycaster.intersectObjects(meshes, false);
+    for (const hit of meshHits) {
+      const mass = masses.find(m => m.id === hit.object.userData.massId);
+      const view = massViews.get(mass.id);
+      const info = view.faceMap[hit.faceIndex];
+      const pt = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
+      const hitPlane = info.type === 'wall' ? wallPlaneFromMass(mass, info.edgeIndex, pt) : capPlaneOf(mass, pt);
+      const match = candidates.find(c => planesEqual(c, hitPlane));
+      if (match) return { point: pt, plane: match };
+    }
+    const groundOut = new THREE.Vector3();
+    if (raycaster.ray.intersectPlane(groundPlane, groundOut)) {
+      const pt = { x: groundOut.x, y: groundOut.y, z: groundOut.z };
+      const match = candidates.find(c => planesEqual(c, groundPlaneFull(pt)));
+      if (match) return { point: pt, plane: match };
+    }
+    const plane0 = candidates[0];
+    const pt = intersectMousePlane(plane0);
+    return pt ? { point: pt, plane: plane0 } : null;
+  }
+
+  /* ============================================================
+     DRAW MODE
+     ============================================================ */
+  function drawEnter() {
+    drawState.active = true;
+    drawState.points = [];
+    drawState.planeCandidates = null;
+    drawState.typed = '';
+    if (!drawState.markerGroup) { drawState.markerGroup = new THREE.Group(); scene.add(drawState.markerGroup); }
+    clearDrawVisuals();
+    setStatus('Click to place the first point. Snaps to existing vertices and faces.');
+    hideHud();
+  }
+  function drawExit() { drawState.active = false; clearDrawVisuals(); drawState.points = []; drawState.planeCandidates = null; drawState.typed = ''; hideHud(); }
+
+  function clearDrawVisuals() {
+    if (drawState.markerGroup) {
+      while (drawState.markerGroup.children.length) {
+        const c = drawState.markerGroup.children.pop();
+        c.geometry && c.geometry.dispose(); c.material && c.material.dispose();
+      }
+    }
+    if (drawState.previewLine) { scene.remove(drawState.previewLine); drawState.previewLine.geometry.dispose(); drawState.previewLine.material.dispose(); drawState.previewLine = null; }
+    if (drawState.committedLine) { scene.remove(drawState.committedLine); drawState.committedLine.geometry.dispose(); drawState.committedLine.material.dispose(); drawState.committedLine = null; }
+  }
+  function currentNormal() { return (drawState.planeCandidates && drawState.planeCandidates[0]) ? drawState.planeCandidates[0].normal : { x: 0, y: 1, z: 0 }; }
+
+  function addDrawMarker(world, isFirst) {
+    const geo = new THREE.SphereGeometry(0.13, 10, 8);
+    const mat = new THREE.MeshBasicMaterial({ color: isFirst ? COLORS.accent : COLORS.edgeLine });
+    const m = new THREE.Mesh(geo, mat);
+    const n = currentNormal();
+    m.position.set(world.x + n.x * 0.02, world.y + n.y * 0.02, world.z + n.z * 0.02);
+    drawState.markerGroup.add(m);
+  }
+  function redrawDrawSegments() {
+    const pts = drawState.points;
+    if (pts.length < 1) return;
+    if (drawState.committedLine) { scene.remove(drawState.committedLine); drawState.committedLine.geometry.dispose(); drawState.committedLine.material.dispose(); drawState.committedLine = null; }
+    const n = currentNormal();
+    const verts = pts.map(p => new THREE.Vector3(p.world.x + n.x * 0.02, p.world.y + n.y * 0.02, p.world.z + n.z * 0.02));
+    const geo = new THREE.BufferGeometry().setFromPoints(verts);
+    drawState.committedLine = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: COLORS.accent }));
+    scene.add(drawState.committedLine);
+  }
+
+  function computeFirstPointHit() {
+    const v = nearestVertexOnScreen(CONFIG.vertexSnapPx, null);
+    if (v) return { world: v.world, planes: planesForVertex(v) };
+    const hit = rawSceneHit();
+    if (!hit) return null;
+    let plane;
+    if (hit.kind === 'ground') {
+      plane = { origin: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 1, z: 0 }, u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 0, z: 1 } };
+    } else {
+      const mass = masses.find(m => m.id === hit.massId);
+      plane = hit.faceInfo.type === 'wall' ? wallPlaneFromMass(mass, hit.faceInfo.edgeIndex, hit.point) : capPlaneOf(mass, hit.point);
+    }
+    const local = worldToPlaneXZ(plane, hit.point);
+    const snapped = { x: snap(local.x, CONFIG.gridSnap), z: snap(local.z, CONFIG.gridSnap) };
+    const world = planeToWorld(plane, snapped.x, snapped.z, 0);
+    return { world, planes: [{ ...plane, origin: world }] };
+  }
+
+  function computeDrawCandidate() {
+    if (!drawState.points.length) return computeFirstPointHit();
+    const candidates = drawState.planeCandidates;
+    if (!candidates || !candidates.length) return null;
+    const workingPlane = candidates[0];
+    const prevWorld = drawState.points[drawState.points.length - 1].world;
+    const prevLocal = worldToPlaneXZ(workingPlane, prevWorld);
+
+    const vsnap = nearestVertexOnScreen(CONFIG.vertexSnapPx, entry =>
+      planesForVertex(entry).some(p => candidates.some(c => planesEqual(c, p)))
+    );
+
+    let world, matchedPlanes;
+    if (vsnap) {
+      world = vsnap.world;
+      matchedPlanes = planesForVertex(vsnap).filter(p => candidates.some(c => planesEqual(c, p)));
+    } else {
+      const ch = constrainedHit(candidates);
+      if (!ch) return null;
+      world = ch.point;
+      matchedPlanes = [ch.plane];
+    }
+
+    let local = worldToPlaneXZ(workingPlane, world);
+    let adjusted = false;
+    if (window.__shiftDown) {
+      const dx = local.x - prevLocal.x, dz = local.z - prevLocal.z;
+      local = Math.abs(dx) > Math.abs(dz) ? { x: local.x, z: prevLocal.z } : { x: prevLocal.x, z: local.z };
+      adjusted = true;
+    }
+    if (drawState.typed) {
+      const dist = parseFloat(drawState.typed);
+      if (!isNaN(dist) && dist > 0) {
+        const dx = local.x - prevLocal.x, dz = local.z - prevLocal.z;
+        const len = Math.hypot(dx, dz) || 1;
+        local = { x: prevLocal.x + (dx / len) * dist, z: prevLocal.z + (dz / len) * dist };
+        adjusted = true;
+      }
+    } else if (!vsnap) {
+      local = { x: snap(local.x, CONFIG.gridSnap), z: snap(local.z, CONFIG.gridSnap) };
+      adjusted = true;
+    }
+    const finalWorld = planeToWorld(workingPlane, local.x, local.z, 0);
+    return { world: finalWorld, planes: adjusted ? [workingPlane] : matchedPlanes };
+  }
+
+  function wouldSelfIntersectLocal(originWorld, targetWorld, plane) {
+    const pts = drawState.points;
+    if (pts.length < 2) return false;
+    const o = worldToPlaneXZ(plane, originWorld), t = worldToPlaneXZ(plane, targetWorld);
+    for (let i = 0; i < pts.length - 1; i++) {
+      if (i === pts.length - 2) continue;
+      const a = worldToPlaneXZ(plane, pts[i].world), b = worldToPlaneXZ(plane, pts[i + 1].world);
+      if (segmentsIntersect(o, t, a, b)) return true;
+    }
+    return false;
+  }
+
+  function drawPointerMove() {
+    if (!drawState.active) return;
+    const result = computeDrawCandidate();
+    if (!result) { hideHud(); drawState._candidate = null; return; }
+
+    let willClose = false;
+    if (drawState.points.length >= 3) {
+      const startScreen = worldToScreen(drawState.points[0].world.x, drawState.points[0].world.y, drawState.points[0].world.z);
+      if (Math.hypot(startScreen.x - lastClientX, startScreen.y - lastClientY) < CONFIG.closeThresholdPx) willClose = true;
+    }
+
+    if (drawState.points.length) {
+      const plane = (drawState.planeCandidates && drawState.planeCandidates[0]) || { origin: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 1, z: 0 }, u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 0, z: 1 } };
+      const origin = drawState.points[drawState.points.length - 1].world;
+      const target = willClose ? drawState.points[0].world : result.world;
+      const blocked = !willClose && wouldSelfIntersectLocal(origin, target, plane);
+      const color = blocked ? COLORS.danger : COLORS.accent;
+      if (drawState.previewLine) { scene.remove(drawState.previewLine); drawState.previewLine.geometry.dispose(); drawState.previewLine.material.dispose(); }
+      const n = plane.normal;
+      const o3 = new THREE.Vector3(origin.x + n.x * 0.02, origin.y + n.y * 0.02, origin.z + n.z * 0.02);
+      const t3 = new THREE.Vector3(target.x + n.x * 0.02, target.y + n.y * 0.02, target.z + n.z * 0.02);
+      const geo = new THREE.BufferGeometry().setFromPoints([o3, t3]);
+      drawState.previewLine = new THREE.Line(geo, new THREE.LineDashedMaterial({ color, dashSize: 0.3, gapSize: 0.18 }));
+      drawState.previewLine.computeLineDistances();
+      scene.add(drawState.previewLine);
+
+      const oLocal = worldToPlaneXZ(plane, origin), tLocal = worldToPlaneXZ(plane, target);
+      const len = Math.hypot(tLocal.x - oLocal.x, tLocal.z - oLocal.z);
+      showHud(willClose ? 'Close' : 'Length', drawState.typed || len.toFixed(2), willClose);
+    } else {
+      hideHud();
+    }
+    drawState._candidate = result;
+    drawState._willClose = willClose;
+  }
+
+  function drawClick() {
+    if (!drawState.active) return;
+    const result = drawState._candidate;
+    if (!result) return;
+
+    if (drawState._willClose && drawState.points.length >= 3) { finishDrawPolygon(); return; }
+
+    if (drawState.points.length >= 1) {
+      const plane = drawState.planeCandidates[0];
+      if (wouldSelfIntersectLocal(drawState.points[drawState.points.length - 1].world, result.world, plane)) {
+        flashStatus("That line would cross another edge — try a different point.", true);
+        return;
+      }
+    }
+
+    drawState.points.push({ world: result.world });
+    if (!drawState.planeCandidates) {
+      drawState.planeCandidates = result.planes;
+    } else {
+      const narrowed = drawState.planeCandidates.filter(c => result.planes.some(p => planesEqual(c, p)));
+      drawState.planeCandidates = narrowed.length ? narrowed : drawState.planeCandidates;
+    }
+    if (drawState.points.length >= 3 && drawState.planeCandidates.length > 1) {
+      drawState.planeCandidates = [drawState.planeCandidates[0]];
+    }
+
+    addDrawMarker(result.world, drawState.points.length === 1);
+    redrawDrawSegments();
+    drawState.typed = '';
+    setStatus(drawState.points.length < 3
+      ? 'Click to place the next point. Hold Shift to snap orthogonally.'
+      : 'Keep going, or click back near the first point to close the shape.');
+  }
+
+  function finishDrawPolygon() {
+    const plane = drawState.planeCandidates[0];
+    const localPts = drawState.points.map(p => worldToPlaneXZ(plane, p.world));
+    if (!isSimplePolygon(localPts)) {
+      flashStatus("That shape isn't valid yet — edges can't cross and it needs real area.", true);
+      return;
+    }
+    pushUndo();
+    const mass = {
+      id: nextId++,
+      plane: { origin: { ...plane.origin }, normal: { ...plane.normal }, u: { ...plane.u }, v: { ...plane.v } },
+      points: ensureCCW(localPts),
+      depth: CONFIG.defaultDepth,
+    };
+    masses.push(mass);
+    rebuildMassGeometry(mass);
+    hideEmptyState();
+    drawEnter();
+  }
+
+  /* ============================================================
+     MOVE MODE
+     ============================================================ */
+  function moveEnter() { syncAllViews(); setStatus('Click and drag a volume to move it. Once selected, drag a corner or wall to reshape it.'); }
+  function moveExit() {
+    moveState.dragging = false; moveState.downHit = null; moveState.selectedMassId = null;
+    syncAllViews(); updateDeleteButton();
+  }
+
+  function vertexNeighbors(points, i) {
+    const n = points.length;
+    return { prev: points[(i - 1 + n) % n], cur: points[i], next: points[(i + 1) % n] };
+  }
+  function unit(dx, dz) { const l = Math.hypot(dx, dz) || 1; return { x: dx / l, z: dz / l }; }
+  function perp(d) { return { x: d.z, z: -d.x }; }
+  function constrainDelta(dirCandidates, dx, dz) {
+    let best = null, bestMag = -1;
+    dirCandidates.forEach(d => { const mag = Math.abs(dx * d.x + dz * d.z); if (mag > bestMag) { bestMag = mag; best = d; } });
+    if (!best) return { x: dx, z: dz };
+    const proj = dx * best.x + dz * best.z;
+    return { x: best.x * proj, z: best.z * proj };
+  }
+
+  // --- magnetic snapping while moving: snap to OTHER masses' corners and edges ---
+  function collectSnapVertices(excludeMassId) {
+    const pts = [];
+    masses.forEach(m => {
+      if (m.id === excludeMassId) return;
+      m.points.forEach(p => {
+        pts.push(planeToWorld(m.plane, p.x, p.z, 0));
+        pts.push(planeToWorld(m.plane, p.x, p.z, m.depth));
+      });
+    });
+    return pts;
+  }
+  function collectSnapEdges(excludeMassId) {
+    const segs = [];
+    masses.forEach(m => {
+      if (m.id === excludeMassId) return;
+      const n = m.points.length;
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        const p = m.points[i], q = m.points[j];
+        segs.push({ a: planeToWorld(m.plane, p.x, p.z, 0), b: planeToWorld(m.plane, q.x, q.z, 0) });
+        segs.push({ a: planeToWorld(m.plane, p.x, p.z, m.depth), b: planeToWorld(m.plane, q.x, q.z, m.depth) });
+      }
+    });
+    return segs;
+  }
+  function closestPointOnSegment(p, a, b) {
+    const ab = vSub(b, a);
+    const t0 = vDot(vSub(p, a), ab) / (vDot(ab, ab) || 1);
+    const t = Math.max(0, Math.min(1, t0));
+    return vAdd(a, vScale(ab, t));
+  }
+  // checks every moving point (at both its near & far instance) against every
+  // other mass's vertices and edges; returns the single closest snap as a
+  // LOCAL (x,z) delta to apply uniformly to all moving points, or null.
+  function bestSnapAdjustment(mass, movingLocalPoints, vertexTargets, edgeSegments, maxPx) {
+    let best = null, bestDist = Infinity;
+    movingLocalPoints.forEach(lp => {
+      [0, mass.depth].forEach(extra => {
+        const w = planeToWorld(mass.plane, lp.x, lp.z, extra);
+        const ws = worldToScreen(w.x, w.y, w.z);
+        vertexTargets.forEach(t => {
+          const ts = worldToScreen(t.x, t.y, t.z);
+          const d = Math.hypot(ws.x - ts.x, ws.y - ts.y);
+          if (d < bestDist) { bestDist = d; best = { w, t }; }
+        });
+        edgeSegments.forEach(seg => {
+          const t = closestPointOnSegment(w, seg.a, seg.b);
+          const ts = worldToScreen(t.x, t.y, t.z);
+          const d = Math.hypot(ws.x - ts.x, ws.y - ts.y);
+          if (d < bestDist) { bestDist = d; best = { w, t }; }
+        });
+      });
+    });
+    if (!best || bestDist > maxPx) return null;
+    const deltaWorld = vSub(best.t, best.w);
+    return { dx: vDot(deltaWorld, mass.plane.u), dz: vDot(deltaWorld, mass.plane.v) };
+  }
+
+  function moveApplyDrag(curLocal) {
+    const hit = moveState.downHit;
+    const mass = masses.find(m => m.id === hit.massId);
+    if (!mass) return;
+    let dx = curLocal.x - moveState.dragStartLocal.x;
+    let dz = curLocal.z - moveState.dragStartLocal.z;
+    const original = moveState.dragOriginalPoints;
+    let candidatePoints = original.map(p => ({ x: p.x, z: p.z }));
+    let movingIndices = [];
+
+    if (hit.type === 'vertex') {
+      const i = hit.pointIndex;
+      if (window.__shiftDown) {
+        const { prev, cur, next } = vertexNeighbors(original, i);
+        const dIn = unit(cur.x - prev.x, cur.z - prev.z), dOut = unit(next.x - cur.x, next.z - cur.z);
+        const c = constrainDelta([dIn, perp(dIn), dOut, perp(dOut)], dx, dz);
+        dx = c.x; dz = c.z;
+      }
+      candidatePoints[i] = { x: original[i].x + dx, z: original[i].z + dz };
+      movingIndices = [i];
+    } else if (hit.type === 'wall') {
+      const i = hit.edgeIndex, n = original.length, j = (i + 1) % n;
+      if (window.__shiftDown) {
+        const along = unit(original[j].x - original[i].x, original[j].z - original[i].z);
+        const c = constrainDelta([along, perp(along)], dx, dz);
+        dx = c.x; dz = c.z;
+      }
+      candidatePoints[i] = { x: original[i].x + dx, z: original[i].z + dz };
+      candidatePoints[j] = { x: original[j].x + dx, z: original[j].z + dz };
+      movingIndices = [i, j];
+    } else if (hit.type === 'mass') {
+      if (window.__shiftDown) { if (Math.abs(dx) > Math.abs(dz)) dz = 0; else dx = 0; }
+      candidatePoints = original.map(p => ({ x: p.x + dx, z: p.z + dz }));
+      movingIndices = candidatePoints.map((_, idx) => idx);
+    }
+
+    // magnetic snapping to other volumes (Shift already means "precise manual
+    // control", so skip snapping while it's held to avoid the two fighting)
+    if (!window.__shiftDown) {
+      const vertexTargets = collectSnapVertices(mass.id);
+      const edgeSegments = collectSnapEdges(mass.id);
+      const movingPts = movingIndices.map(idx => candidatePoints[idx]);
+      const adj = bestSnapAdjustment(mass, movingPts, vertexTargets, edgeSegments, CONFIG.snapPx);
+      if (adj) {
+        movingIndices.forEach(idx => {
+          candidatePoints[idx] = { x: candidatePoints[idx].x + adj.dx, z: candidatePoints[idx].z + adj.dz };
+        });
+      }
+    }
+
+    if (isSimplePolygon(candidatePoints)) {
+      mass.points = candidatePoints;
+      rebuildMassGeometry(mass);
+      setHudValid(true);
+    } else {
+      setHudValid(false);
+    }
+  }
+
+  function updateDeleteButton() { dom.deleteBtn.disabled = moveState.selectedMassId === null; }
+  function selectMass(massId) { moveState.selectedMassId = massId; syncAllViews(); updateDeleteButton(); }
+  function deleteSelectedMass() {
+    if (moveState.selectedMassId === null) return;
+    pushUndo();
+    masses = masses.filter(m => m.id !== moveState.selectedMassId);
+    moveState.selectedMassId = null;
+    syncAllViews();
+    updateDeleteButton();
+    if (!masses.length) showEmptyState();
+  }
+
+  /* ============================================================
+     PUSH / PULL MODE
+     ============================================================ */
+  function pushPullEnter() { setStatus('Click and drag any face to push or pull it. Type a number for an exact distance.'); }
+  function pushPullExit() { ppState.active = false; ppState.dragging = false; ppState.typed = ''; hideHud(); }
+
+  function pushPullBegin(faceHit) {
+    const mass = masses.find(m => m.id === faceHit.massId);
+    if (!mass) return;
+    ppState.active = true; ppState.dragging = false;
+    ppState.massId = mass.id; ppState.faceType = faceHit.type; ppState.edgeIndex = faceHit.edgeIndex;
+    ppState.origin = new THREE.Vector3(faceHit.point.x, faceHit.point.y, faceHit.point.z);
+    ppState.originalPoints = mass.points.map(p => ({ x: p.x, z: p.z }));
+    ppState.originalDepth = mass.depth;
+    ppState.originalPlaneOrigin = { ...mass.plane.origin };
+    ppState.typed = ''; ppState.liveDelta = 0;
+
+    if (faceHit.type === 'top') ppState.normal = new THREE.Vector3(mass.plane.normal.x, mass.plane.normal.y, mass.plane.normal.z);
+    else if (faceHit.type === 'bottom') ppState.normal = new THREE.Vector3(-mass.plane.normal.x, -mass.plane.normal.y, -mass.plane.normal.z);
+    else { const n = wallOutwardNormal3D(mass, faceHit.edgeIndex); ppState.normal = new THREE.Vector3(n.x, n.y, n.z); }
+  }
+
+  function pushPullUpdate() {
+    if (!ppState.active) return;
+    const camDir = new THREE.Vector3(); camera.getWorldDirection(camDir);
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir, ppState.origin);
+    raycaster.setFromCamera(mouseNDC, camera);
+    const hitPt = new THREE.Vector3();
+    if (!raycaster.ray.intersectPlane(plane, hitPt)) return;
+    const delta = hitPt.clone().sub(ppState.origin).dot(ppState.normal);
+    ppState.liveDelta = delta;
+
+    let applyDelta = delta;
+    const label = (ppState.faceType === 'top' || ppState.faceType === 'bottom') ? 'Height' : 'Offset';
+    if (ppState.typed) {
+      const v = parseFloat(ppState.typed);
+      if (!isNaN(v)) applyDelta = v * (delta < 0 ? -1 : 1);
+    } else {
+      applyDelta = snap(delta, CONFIG.gridSnap);
+    }
+    applyPushPull(applyDelta);
+    showHud(label, ppState.typed || Math.abs(applyDelta).toFixed(2), null);
+  }
+
+  function applyPushPull(delta) {
+    const mass = masses.find(m => m.id === ppState.massId);
+    if (!mass) return;
+
+    if (ppState.faceType === 'top') {
+      mass.depth = Math.max(CONFIG.minDepth, ppState.originalDepth + delta);
+      rebuildMassGeometry(mass);
+      setHudValid(true);
+    } else if (ppState.faceType === 'bottom') {
+      const newDepth = Math.max(CONFIG.minDepth, ppState.originalDepth + delta);
+      const applied = newDepth - ppState.originalDepth;
+      const n = mass.plane.normal;
+      mass.depth = newDepth;
+      mass.plane = {
+        ...mass.plane,
+        origin: { x: ppState.originalPlaneOrigin.x - n.x * applied, y: ppState.originalPlaneOrigin.y - n.y * applied, z: ppState.originalPlaneOrigin.z - n.z * applied },
+      };
+      rebuildMassGeometry(mass);
+      setHudValid(true);
+    } else {
+      const i = ppState.edgeIndex, len = ppState.originalPoints.length, j = (i + 1) % len;
+      const n2d = wallNormal2D(ppState.originalPoints, i);
+      const candidate = ppState.originalPoints.map(p => ({ x: p.x, z: p.z }));
+      candidate[i] = { x: ppState.originalPoints[i].x + n2d.x * delta, z: ppState.originalPoints[i].z + n2d.z * delta };
+      candidate[j] = { x: ppState.originalPoints[j].x + n2d.x * delta, z: ppState.originalPoints[j].z + n2d.z * delta };
+      if (isSimplePolygon(candidate)) { mass.points = candidate; rebuildMassGeometry(mass); setHudValid(true); }
+      else setHudValid(false);
+    }
+  }
+
+  function pushPullCommit() {
+    if (!ppState.active) return;
+    pushUndo();
+    const mass = masses.find(m => m.id === ppState.massId);
+    const finalData = cloneMassData(mass);
+    undoStack[undoStack.length - 1] = undoStack[undoStack.length - 1].map(m =>
+      m.id === ppState.massId
+        ? cloneMassData({ id: m.id, depth: ppState.originalDepth, plane: { ...mass.plane, origin: ppState.originalPlaneOrigin }, points: ppState.originalPoints })
+        : m
+    );
+    mass.points = finalData.points; mass.depth = finalData.depth; mass.plane = finalData.plane;
+    ppState.active = false; ppState.dragging = false; ppState.typed = '';
+    hideHud();
+    updateHistoryButtons();
+  }
+
+  /* ============================================================
+     UI / HUD
+     ============================================================ */
+  function setStatus(text) { dom.statusText.textContent = text; dom.statusText.classList.remove('status--danger'); }
+  function flashStatus(text, danger) {
+    dom.statusText.textContent = text;
+    dom.statusText.classList.toggle('status--danger', !!danger);
+    if (danger) setTimeout(() => { if (mode === 'draw') drawDefaultStatus(); }, 1600);
+  }
+  function drawDefaultStatus() {
+    setStatus(drawState.points.length === 0
+      ? 'Click to place the first point. Snaps to existing vertices and faces.'
+      : drawState.points.length < 3
+        ? 'Click to place the next point. Hold Shift to snap orthogonally.'
+        : 'Keep going, or click back near the first point to close the shape.');
+  }
+  function showHud(label, value, isCloseHint) {
+    dom.hud.classList.add('hud--visible');
+    if (isCloseHint) { dom.hudLabel.textContent = 'Enter'; dom.hudValue.textContent = '↵ close shape'; }
+    else { dom.hudLabel.textContent = label; dom.hudValue.textContent = value + ' m'; }
+    dom.hud.classList.remove('hud--invalid');
+  }
+  function setHudValid(valid) { dom.hud.classList.toggle('hud--invalid', !valid); }
+  function hideHud() { dom.hud.classList.remove('hud--visible'); }
+  function showEmptyState() { dom.emptyState.classList.add('empty--visible'); }
+  function hideEmptyState() { dom.emptyState.classList.remove('empty--visible'); }
+  function updateCursor() { canvas.style.cursor = mode === 'draw' ? 'crosshair' : mode === 'pushpull' ? 'ns-resize' : 'default'; }
+
+  function setMode(newMode) {
+    if (newMode === 'split') return;
+    if (mode === 'draw') drawExit();
+    if (mode === 'move') moveExit();
+    if (mode === 'pushpull') pushPullExit();
+    mode = newMode;
+    [...dom.toolButtons].forEach(b => b.classList.toggle('tool--active', b.dataset.mode === mode));
+    if (mode === 'draw') drawEnter();
+    if (mode === 'move') moveEnter();
+    if (mode === 'pushpull') pushPullEnter();
+    updateCursor();
+  }
+
+  /* ============================================================
+     INPUT WIRING
+     ============================================================ */
+  function onPointerDown(e) {
+    if (e.button === 1) {
+      e.preventDefault();
+      if (window.__shiftDown) { isOrbiting = true; isPanning = false; } else { isPanning = true; isOrbiting = false; }
+      lastPx = e.clientX; lastPy = e.clientY;
+      return;
+    }
+    if (e.button !== 0) return;
+    setMouseNDC(e.clientX, e.clientY);
+
+    if (mode === 'draw') { drawPointerMove(); drawClick(); return; }
+
+    if (mode === 'move') {
+      const handle = nearestVertexOnScreen(CONFIG.vertexSnapPx, null);
+      let raw = null;
+      if (handle) raw = { type: 'vertex', massId: handle.massId, pointIndex: handle.pointIndex };
+      else {
+        const face = pickFace();
+        if (face && face.type === 'wall') raw = { type: 'wall', massId: face.massId, edgeIndex: face.edgeIndex };
+        else if (face) raw = { type: 'mass', massId: face.massId };
+      }
+      // sub-element editing (vertex/wall) is only available on the mass
+      // that's already selected — any first touch on a different/unselected
+      // mass always grabs the whole thing (and selects it).
+      let downHit = null;
+      if (raw) downHit = (raw.massId === moveState.selectedMassId) ? raw : { type: 'mass', massId: raw.massId };
+      moveState.downHit = downHit;
+      moveState.dragging = false;
+      if (downHit) {
+        const mass = masses.find(m => m.id === downHit.massId);
+        moveState.dragPlane = mass.plane;
+        const startWorld = intersectMousePlane(mass.plane);
+        moveState.dragStartLocal = startWorld ? worldToPlaneXZ(mass.plane, startWorld) : { x: 0, z: 0 };
+        moveState.dragStartScreen = { x: e.clientX, y: e.clientY };
+        moveState.dragOriginalPoints = mass.points.map(p => ({ x: p.x, z: p.z }));
+        selectMass(downHit.massId);
+      } else {
+        selectMass(null);
+      }
+      return;
+    }
+
+    if (mode === 'pushpull') {
+      const face = pickFace();
+      if (face) { pushPullBegin(face); ppState.downScreen = { x: e.clientX, y: e.clientY }; }
+    }
+  }
+
+  function onPointerMove(e) {
+    setMouseNDC(e.clientX, e.clientY);
+
+    if (isOrbiting) {
+      const dx = e.clientX - lastPx, dy = e.clientY - lastPy;
+      camState.theta -= dx * 0.0065;
+      camState.phi = Math.max(0.18, Math.min(Math.PI / 2 - 0.02, camState.phi - dy * 0.0065));
+      lastPx = e.clientX; lastPy = e.clientY;
+      updateCameraPosition();
+      return;
+    }
+    if (isPanning) {
+      const dx = e.clientX - lastPx, dy = e.clientY - lastPy;
+      const panScale = camState.radius * 0.0016;
+      const forward = new THREE.Vector3(); camera.getWorldDirection(forward);
+      const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize();
+      const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+      camState.target.addScaledVector(right, -dx * panScale);
+      camState.target.addScaledVector(up, dy * panScale);
+      lastPx = e.clientX; lastPy = e.clientY;
+      updateCameraPosition();
+      return;
+    }
+
+    if (mode === 'draw') { drawPointerMove(); return; }
+
+    if (mode === 'move' && moveState.downHit) {
+      const moved = Math.hypot(e.clientX - moveState.dragStartScreen.x, e.clientY - moveState.dragStartScreen.y);
+      if (moved > CONFIG.dragThresholdPx) moveState.dragging = true;
+      if (moveState.dragging) {
+        const curWorld = intersectMousePlane(moveState.dragPlane);
+        if (curWorld) moveApplyDrag(worldToPlaneXZ(moveState.dragPlane, curWorld));
+      }
+      return;
+    }
+
+    if (mode === 'pushpull' && ppState.active) {
+      const moved = ppState.downScreen ? Math.hypot(e.clientX - ppState.downScreen.x, e.clientY - ppState.downScreen.y) : 0;
+      if (moved > CONFIG.dragThresholdPx) ppState.dragging = true;
+      pushPullUpdate();
+      return;
+    }
+  }
+
+  function onPointerUp() {
+    isOrbiting = false; isPanning = false;
+
+    if (mode === 'move' && moveState.downHit) {
+      if (moveState.dragging) {
+        const mass = masses.find(m => m.id === moveState.downHit.massId);
+        if (mass && isSimplePolygon(mass.points)) {
+          pushUndo();
+          undoStack[undoStack.length - 1] = undoStack[undoStack.length - 1].map(m =>
+            m.id === mass.id ? cloneMassData({ id: m.id, depth: m.depth, plane: m.plane, points: moveState.dragOriginalPoints }) : m
+          );
+        } else if (mass) {
+          mass.points = moveState.dragOriginalPoints;
+          rebuildMassGeometry(mass);
+        }
+      }
+      moveState.downHit = null;
+      moveState.dragging = false;
+    }
+
+    if (mode === 'pushpull' && ppState.active) pushPullCommit();
+  }
+
+  function onWheel(e) {
+    e.preventDefault();
+    const factor = Math.exp(e.deltaY * 0.0012);
+    camState.radius = Math.max(camState.minR, Math.min(camState.maxR, camState.radius * factor));
+    updateCameraPosition();
+  }
+
+  function onKeyDown(e) {
+    if (e.key === 'Shift') window.__shiftDown = true;
+
+    if (e.key === 'Escape') {
+      if (mode === 'draw') drawEnter();
+      if (mode === 'pushpull' && ppState.active) {
+        const mass = masses.find(m => m.id === ppState.massId);
+        if (mass) {
+          mass.points = ppState.originalPoints;
+          mass.depth = ppState.originalDepth;
+          mass.plane = { ...mass.plane, origin: ppState.originalPlaneOrigin };
+          rebuildMassGeometry(mass);
+        }
+        pushPullExit();
+      }
+      return;
+    }
+
+    if ((e.key === 'Delete' || e.key === 'Backspace') && mode === 'move') {
+      const tag = document.activeElement && document.activeElement.tagName;
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA') { deleteSelectedMass(); return; }
+    }
+
+    if ((e.key === 'z' || e.key === 'Z') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+
+    const isTypingContext = (mode === 'draw' && drawState.points.length >= 1) || (mode === 'pushpull' && ppState.active);
+    if (!isTypingContext) return;
+
+    if (/^[0-9.]$/.test(e.key)) {
+      const buf = mode === 'draw' ? drawState : ppState;
+      buf.typed += e.key;
+    } else if (e.key === 'Backspace') {
+      const buf = mode === 'draw' ? drawState : ppState;
+      buf.typed = buf.typed.slice(0, -1);
+    } else if (e.key === 'Enter') {
+      if (mode === 'draw' && drawState.typed) { drawState._willClose = false; drawPointerMove(); drawClick(); }
+      else if (mode === 'pushpull' && ppState.typed) pushPullCommit();
+    }
+  }
+  function onKeyUp(e) { if (e.key === 'Shift') window.__shiftDown = false; }
+
+  /* ============================================================
+     INIT
+     ============================================================ */
+  function buildGrid() {
+    const size = 200, divisions = 200;
+    const grid = new THREE.GridHelper(size, divisions, 0xc3c8d1, 0xe1e3e8);
+    scene.add(grid);
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshBasicMaterial({ color: 0xe9ebee }));
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.02;
+    scene.add(ground);
+  }
+
+  function init() {
+    dom = {
+      canvas: document.getElementById('viewport'),
+      container: document.getElementById('viewport-container'),
+      toolButtons: document.querySelectorAll('.tool'),
+      undoBtn: document.getElementById('btn-undo'),
+      redoBtn: document.getElementById('btn-redo'),
+      deleteBtn: document.getElementById('btn-delete'),
+      resetViewBtn: document.getElementById('btn-reset-view'),
+      statusText: document.getElementById('status-text'),
+      hud: document.getElementById('hud'),
+      hudLabel: document.getElementById('hud-label'),
+      hudValue: document.getElementById('hud-value'),
+      emptyState: document.getElementById('empty-state'),
+    };
+    canvas = dom.canvas; container = dom.container;
+
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(42, container.clientWidth / container.clientHeight, 0.1, 1000);
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setClearColor(0xeef0f3, 1);
+    raycaster = new THREE.Raycaster();
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+    const sun = new THREE.DirectionalLight(0xffffff, 0.65);
+    sun.position.set(18, 30, 12);
+    scene.add(sun);
+    const fill = new THREE.DirectionalLight(0xb9d0ff, 0.2);
+    fill.position.set(-14, 10, -16);
+    scene.add(fill);
+
+    buildGrid();
+    updateCameraPosition();
+
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    canvas.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('resize', onResize);
+
+    dom.toolButtons.forEach(btn => btn.addEventListener('click', () => setMode(btn.dataset.mode)));
+    dom.undoBtn.addEventListener('click', undo);
+    dom.redoBtn.addEventListener('click', redo);
+    dom.deleteBtn.addEventListener('click', deleteSelectedMass);
+    dom.resetViewBtn.addEventListener('click', resetView);
+
+    updateHistoryButtons();
+    updateDeleteButton();
+    showEmptyState();
+    setMode('draw');
+    animate();
+  }
+
+  function onResize() {
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+  }
+  function animate() { requestAnimationFrame(animate); renderer.render(scene, camera); }
+
+  window.__shiftDown = false;
+  window.addEventListener('DOMContentLoaded', init);
+})();
+</script>
+</body>
+</html>
