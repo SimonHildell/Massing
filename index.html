@@ -92,7 +92,7 @@
   }
   .status--danger{ color:var(--danger); border-color:rgba(220,68,68,0.4); }
 
-  /* ---------- HUD (measurements readout, bottom-right) — signature element ---------- */
+  /* ---------- HUD (measurements readout, bottom-right) ---------- */
   #hud{
     position:absolute; right:14px; bottom:14px;
     background:rgba(255,255,255,0.96);
@@ -226,25 +226,6 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-/* ============================================================
-   Finch Massing — standalone 3D massing editor (demo)
-   Vanilla JS + Three.js r128. No build step, no framework.
-
-   ARCHITECTURE NOTE FOR REUSE IN FINCH:
-   `masses[]` is the single source of truth, fully decoupled from
-   the Three.js scene graph. Each mass is a 2D polygon sketched on
-   an oriented plane, then extruded along that plane's normal:
-       { id, plane:{origin,normal,u,v}, points:[{x,z}], depth }
-   For a mass drawn on the ground, plane = {origin:(0,0,0),
-   normal:(0,1,0), u:(1,0,0), v:(0,0,1)} — so points.x/z ARE world
-   x/z and depth IS height, exactly like a simple footprint+height
-   model. A mass drawn on an existing face just uses a different
-   plane; all the same math (triangulation, push/pull, move-drag)
-   applies unchanged because it's written in the plane's local
-   (x,z) coordinates, not world space. This is what lets "draw on
-   any face" and "push/pull any face" share one code path.
-   ============================================================ */
-
 (function () {
   'use strict';
 
@@ -257,14 +238,18 @@
     minArea: 0.5,
     closeThresholdPx: 18,
     dragThresholdPx: 4,
-    vertexSnapPx: 16,
+    vertexSnapPx: 18,
     snapPx: 14,
-    handleRadius: 0.15,
+    handleRadius: 0.18,
+    pushPullSnapTolerance: 0.3,
+    moveVertexSnapTolerance: 0.4,
+    moveEdgeSnapTolerance: 0.28,
   };
 
   const COLORS = {
     massFill: 0xb7c0cf,
     massFillSelected: 0xf1d8a6,
+    subHighlight: 0xf2a93b,
     edgeLine: 0x2b313b,
     accent: 0x2f7fd6,
     danger: 0xdc4444,
@@ -283,9 +268,10 @@
 
   /* ---------------- SCENE-GRAPH CACHE ---------------- */
   const massViews = new Map(); // massId -> {group,mesh,edges,faceMap,topHandles,botHandles}
+  let highlightMesh = null;    
 
   /* ---------------- APP STATE ---------------- */
-  let mode = 'draw'; // 'draw' | 'move' | 'pushpull' | 'split'
+  let mode = 'draw';
 
   const camState = {
     radius: 46, theta: Math.PI * 0.22, phi: 1.02,
@@ -296,8 +282,8 @@
 
   const drawState = {
     active: false,
-    points: [],            // [{world:{x,y,z}}]
-    planeCandidates: null, // array of full plane objects, narrows as points are added
+    points: [],            
+    planeCandidates: null,
     markerGroup: null,
     previewLine: null,
     committedLine: null,
@@ -311,6 +297,7 @@
     dragPlane: null, dragStartLocal: null, dragStartScreen: null,
     dragOriginalPoints: null,
     selectedMassId: null,
+    snapSourceMassId: null, _prevSnapSourceMassId: null,
   };
 
   const ppState = {
@@ -320,13 +307,14 @@
     originalPoints: null, originalDepth: null, originalPlaneOrigin: null,
     typed: '', liveDelta: 0,
     downScreen: null,
+    snapSourceMassId: null, _prevSnapSourceMassId: null,
   };
 
   let undoStack = [], redoStack = [];
   let dom = {};
 
   /* ============================================================
-     SMALL 3D VECTOR HELPERS (plain {x,y,z} objects, framework-free)
+     VECTOR VECTOR MATH HELPERS
      ============================================================ */
   function vAdd(a, b) { return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }; }
   function vSub(a, b) { return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }; }
@@ -335,8 +323,7 @@
   function vNormalize(a) { const l = Math.hypot(a.x, a.y, a.z) || 1; return { x: a.x / l, y: a.y / l, z: a.z / l }; }
 
   /* ============================================================
-     PLANE MATH — the core abstraction that lets masses live on
-     any face (ground, a stacked-on top, or a wall).
+     PLANE MATH
      ============================================================ */
   function planeToWorld(plane, x, z, extra) {
     extra = extra || 0;
@@ -392,7 +379,7 @@
   }
 
   /* ============================================================
-     2D POLYGON MATH — pure, plane-agnostic (operates on local x,z)
+     2D POLYGON MATH
      ============================================================ */
   function snap(v, step) { return Math.round(v / step) * step; }
 
@@ -439,9 +426,7 @@
     function sign(p1, p2, p3) { return (p1.x - p3.x) * (p2.z - p3.z) - (p2.x - p3.x) * (p1.z - p3.z); }
     function pointInTri(p, a, b, c) {
       const d1 = sign(p, a, b), d2 = sign(p, b, c), d3 = sign(p, c, a);
-      const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-      const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-      return !(hasNeg && hasPos);
+      return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0));
     }
     let guard = 0;
     while (idx.length > 3 && guard < 5000) {
@@ -472,7 +457,7 @@
   }
 
   /* ============================================================
-     GEOMETRY BUILD — mass (plane + local points + depth) -> mesh
+     GEOMETRY BUILD
      ============================================================ */
   function buildMassGeometry(mass) {
     const points = ensureCCW(mass.points);
@@ -526,6 +511,21 @@
     return view;
   }
 
+  function massHighlightColor(mass) {
+    if (mode === 'pushpull' && ppState.active && (mass.id === ppState.massId || mass.id === ppState.snapSourceMassId)) {
+      return COLORS.massFillSelected;
+    }
+    if (mode === 'move' && moveState.dragging && mass.id === moveState.snapSourceMassId) {
+      return COLORS.massFillSelected;
+    }
+    if (mass.id === moveState.selectedMassId) return COLORS.massFillSelected;
+    return COLORS.massFill;
+  }
+  function setMassTint(massId, color) {
+    const view = massViews.get(massId);
+    if (view) view.mesh.material.color.setHex(color);
+  }
+
   function rebuildMassGeometry(mass) {
     const view = ensureMassView(mass);
     const { geometry, faceMap, orderedPoints } = buildMassGeometry(mass);
@@ -535,7 +535,7 @@
     view.faceMap = faceMap;
     view.edges.geometry.dispose();
     view.edges.geometry = new THREE.EdgesGeometry(geometry, 25);
-    view.mesh.material.color.setHex(mass.id === moveState.selectedMassId ? COLORS.massFillSelected : COLORS.massFill);
+    view.mesh.material.color.setHex(massHighlightColor(mass));
     refreshHandles(mass);
   }
 
@@ -545,17 +545,84 @@
     view.botHandles.forEach(h => view.group.remove(h));
     view.topHandles = []; view.botHandles = [];
     if (mode !== 'move' || mass.id !== moveState.selectedMassId) return;
+
     const geo = new THREE.SphereGeometry(CONFIG.handleRadius, 12, 10);
-    mass.points.forEach((p) => {
-      const top = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: COLORS.handle }));
+    mass.points.forEach((p, i) => {
+      // Top and bottom handles representing the vertical edges
+      const isEdgeActive = moveState.downHit && moveState.downHit.type === 'edge' && moveState.downHit.pointIndex === i && moveState.downHit.massId === mass.id;
+      const color = isEdgeActive ? COLORS.subHighlight : COLORS.handle;
+     
+      const top = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color }));
       const w1 = planeToWorld(mass.plane, p.x, p.z, mass.depth);
       top.position.set(w1.x, w1.y, w1.z);
       view.group.add(top); view.topHandles.push(top);
-      const bot = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: COLORS.handle }));
+
+      const bot = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color }));
       const w0 = planeToWorld(mass.plane, p.x, p.z, 0);
       bot.position.set(w0.x, w0.y, w0.z);
       view.group.add(bot); view.botHandles.push(bot);
     });
+  }
+
+  function ensureHighlightMesh() {
+    if (!highlightMesh) {
+      const mat = new THREE.MeshBasicMaterial({ color: COLORS.subHighlight, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthTest: true });
+      highlightMesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+      highlightMesh.renderOrder = 10;
+      highlightMesh.visible = false;
+      scene.add(highlightMesh);
+    }
+    return highlightMesh;
+  }
+  function showFaceHighlight(massId, predicate, offsetNormal) {
+    const view = massViews.get(massId);
+    if (!view) { hideFaceHighlight(); return; }
+    const posAttr = view.mesh.geometry.attributes.position;
+    const verts = [];
+    for (let t = 0; t < view.faceMap.length; t++) {
+      if (!predicate(view.faceMap[t])) continue;
+      for (let k = 0; k < 3; k++) {
+        const idx = (t * 3 + k) * 3;
+        verts.push(
+          posAttr.array[idx] + offsetNormal.x * 0.012,
+          posAttr.array[idx + 1] + offsetNormal.y * 0.012,
+          posAttr.array[idx + 2] + offsetNormal.z * 0.012
+        );
+      }
+    }
+    const hm = ensureHighlightMesh();
+    hm.geometry.dispose();
+    hm.geometry = new THREE.BufferGeometry();
+    hm.geometry.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    hm.visible = verts.length > 0;
+  }
+ 
+  function showVerticalEdgeHighlight(mass, edgeIndex) {
+    const p = mass.points[edgeIndex];
+    const w0 = planeToWorld(mass.plane, p.x, p.z, 0);
+    const w1 = planeToWorld(mass.plane, p.x, p.z, mass.depth);
+   
+    // Create a thick cylindrical visualization for the highlighted vertical edge
+    const distance = w0.y - w1.y;
+    const vVerts = [w0.x, w0.y, w0.z, w1.x, w1.y, w1.z];
+    const hm = ensureHighlightMesh();
+    hm.geometry.dispose();
+   
+    // Dynamic generation of edge line overlay box
+    const geo = new THREE.CylinderGeometry(0.12, 0.12, Math.hypot(w1.x-w0.x, w1.y-w0.y, w1.z-w0.z), 6);
+    geo.rotateX(Math.PI / 2);
+    hm.geometry = geo;
+    hm.position.set((w0.x + w1.x)/2, (w0.y + w1.y)/2, (w0.z + w1.z)/2);
+    hm.lookAt(w1.x, w1.y, w1.z);
+    hm.visible = true;
+  }
+
+  function hideFaceHighlight() {
+    if (highlightMesh) {
+      highlightMesh.visible = false;
+      highlightMesh.position.set(0,0,0);
+      highlightMesh.rotation.set(0,0,0);
+    }
   }
 
   function removeMassView(massId) {
@@ -667,7 +734,7 @@
     const info = view.faceMap[hit.faceIndex];
     return { massId: hit.object.userData.massId, point: { x: hit.point.x, y: hit.point.y, z: hit.point.z }, ...info };
   }
-  // screen-space nearest-vertex picker — reliable at any zoom/angle, unlike raycasting tiny spheres
+ 
   function nearestVertexOnScreen(maxPx, filterFn) {
     let best = null, bestDist = Infinity;
     masses.forEach(mass => {
@@ -694,8 +761,6 @@
     if (Math.abs(entry.world.y) < 1e-4) planes.push(groundPlaneFull(entry.world));
     return planes;
   }
-  // once a sketch plane is partially/fully chosen, prefer hitting real geometry
-  // that matches a candidate; fall back to math-intersecting the candidate plane
   function constrainedHit(candidates) {
     raycaster.setFromCamera(mouseNDC, camera);
     const meshes = [...massViews.values()].map(v => v.mesh);
@@ -739,7 +804,7 @@
     if (drawState.markerGroup) {
       while (drawState.markerGroup.children.length) {
         const c = drawState.markerGroup.children.pop();
-        c.geometry && c.geometry.dispose(); c.material && c.material.dispose();
+        if(c.geometry) c.geometry.dispose(); if(c.material) c.material.dispose();
       }
     }
     if (drawState.previewLine) { scene.remove(drawState.previewLine); drawState.previewLine.geometry.dispose(); drawState.previewLine.material.dispose(); drawState.previewLine = null; }
@@ -933,141 +998,179 @@
   }
 
   /* ============================================================
-     MOVE MODE
+     MOVE MODE (RE-ENGINEERED FOR SUB-OBJECT FACES & EDGES ONLY)
      ============================================================ */
-  function moveEnter() { syncAllViews(); setStatus('Click and drag a volume to move it. Once selected, drag a corner or wall to reshape it.'); }
+  function moveEnter() {
+    moveState.snapSourceMassId = null; moveState._prevSnapSourceMassId = null;
+    syncAllViews();
+    setStatus('Select a volume, then grab/drag either a full Face or a single vertical Edge to reshape. Drag near another volume to snap.');
+  }
   function moveExit() {
     moveState.dragging = false; moveState.downHit = null; moveState.selectedMassId = null;
+    moveState.snapSourceMassId = null; moveState._prevSnapSourceMassId = null;
+    hideFaceHighlight();
     syncAllViews(); updateDeleteButton();
   }
 
-  function vertexNeighbors(points, i) {
-    const n = points.length;
-    return { prev: points[(i - 1 + n) % n], cur: points[i], next: points[(i + 1) % n] };
-  }
-  function unit(dx, dz) { const l = Math.hypot(dx, dz) || 1; return { x: dx / l, z: dz / l }; }
-  function perp(d) { return { x: d.z, z: -d.x }; }
-  function constrainDelta(dirCandidates, dx, dz) {
-    let best = null, bestMag = -1;
-    dirCandidates.forEach(d => { const mag = Math.abs(dx * d.x + dz * d.z); if (mag > bestMag) { bestMag = mag; best = d; } });
-    if (!best) return { x: dx, z: dz };
-    const proj = dx * best.x + dz * best.z;
-    return { x: best.x * proj, z: best.z * proj };
+  /* ---- Object-to-object snapping (vertex + edge/face inference) ---- */
+  function closestPointOnSegment2D(p, a, b) {
+    const abx = b.x - a.x, abz = b.z - a.z;
+    const len2 = abx * abx + abz * abz;
+    if (len2 < 1e-9) return { x: a.x, z: a.z };
+    let t = ((p.x - a.x) * abx + (p.z - a.z) * abz) / len2;
+    t = Math.max(0, Math.min(1, t));
+    return { x: a.x + abx * t, z: a.z + abz * t };
   }
 
-  // --- magnetic snapping while moving: snap to OTHER masses' corners and edges ---
-  function collectSnapVertices(excludeMassId) {
-    const pts = [];
-    masses.forEach(m => {
-      if (m.id === excludeMassId) return;
-      m.points.forEach(p => {
-        pts.push(planeToWorld(m.plane, p.x, p.z, 0));
-        pts.push(planeToWorld(m.plane, p.x, p.z, m.depth));
-      });
-    });
-    return pts;
-  }
-  function collectSnapEdges(excludeMassId) {
-    const segs = [];
+  function gatherMoveSnapTargets(plane, excludeMassId) {
+    const vertices = [];
+    const edges = [];
     masses.forEach(m => {
       if (m.id === excludeMassId) return;
       const n = m.points.length;
+      const worldBottom = m.points.map(p => planeToWorld(m.plane, p.x, p.z, 0));
+      const worldTop = m.points.map(p => planeToWorld(m.plane, p.x, p.z, m.depth));
+      const localBottom = worldBottom.map(w => worldToPlaneXZ(plane, w));
+      const localTop = worldTop.map(w => worldToPlaneXZ(plane, w));
+      localBottom.forEach(p => vertices.push({ x: p.x, z: p.z, massId: m.id }));
+      localTop.forEach(p => vertices.push({ x: p.x, z: p.z, massId: m.id }));
       for (let i = 0; i < n; i++) {
         const j = (i + 1) % n;
-        const p = m.points[i], q = m.points[j];
-        segs.push({ a: planeToWorld(m.plane, p.x, p.z, 0), b: planeToWorld(m.plane, q.x, q.z, 0) });
-        segs.push({ a: planeToWorld(m.plane, p.x, p.z, m.depth), b: planeToWorld(m.plane, q.x, q.z, m.depth) });
+        edges.push({ a: localBottom[i], b: localBottom[j], massId: m.id });
+        edges.push({ a: localTop[i], b: localTop[j], massId: m.id });
       }
     });
-    return segs;
+    return { vertices, edges };
   }
-  function closestPointOnSegment(p, a, b) {
-    const ab = vSub(b, a);
-    const t0 = vDot(vSub(p, a), ab) / (vDot(ab, ab) || 1);
-    const t = Math.max(0, Math.min(1, t0));
-    return vAdd(a, vScale(ab, t));
-  }
-  // checks every moving point (at both its near & far instance) against every
-  // other mass's vertices and edges; returns the single closest snap as a
-  // LOCAL (x,z) delta to apply uniformly to all moving points, or null.
-  function bestSnapAdjustment(mass, movingLocalPoints, vertexTargets, edgeSegments, maxPx) {
-    let best = null, bestDist = Infinity;
-    movingLocalPoints.forEach(lp => {
-      [0, mass.depth].forEach(extra => {
-        const w = planeToWorld(mass.plane, lp.x, lp.z, extra);
-        const ws = worldToScreen(w.x, w.y, w.z);
-        vertexTargets.forEach(t => {
-          const ts = worldToScreen(t.x, t.y, t.z);
-          const d = Math.hypot(ws.x - ts.x, ws.y - ts.y);
-          if (d < bestDist) { bestDist = d; best = { w, t }; }
-        });
-        edgeSegments.forEach(seg => {
-          const t = closestPointOnSegment(w, seg.a, seg.b);
-          const ts = worldToScreen(t.x, t.y, t.z);
-          const d = Math.hypot(ws.x - ts.x, ws.y - ts.y);
-          if (d < bestDist) { bestDist = d; best = { w, t }; }
-        });
+
+  // Finds the best (dx,dz) correction that snaps any of the moving points onto
+  // a vertex (highest priority) or edge/face (fallback) of another mass.
+  function findMoveSnap(plane, excludeMassId, movingPoints, dx, dz) {
+    const targets = gatherMoveSnapTargets(plane, excludeMassId);
+
+    let bestVertex = null;
+    movingPoints.forEach(orig => {
+      targets.vertices.forEach(v => {
+        const cdx = v.x - orig.x, cdz = v.z - orig.z;
+        const d = Math.hypot(cdx - dx, cdz - dz);
+        if (d < CONFIG.moveVertexSnapTolerance && (!bestVertex || d < bestVertex.dist)) {
+          bestVertex = { dx: cdx, dz: cdz, dist: d, type: 'vertex', massId: v.massId };
+        }
       });
     });
-    if (!best || bestDist > maxPx) return null;
-    const deltaWorld = vSub(best.t, best.w);
-    return { dx: vDot(deltaWorld, mass.plane.u), dz: vDot(deltaWorld, mass.plane.v) };
+    if (bestVertex) return bestVertex;
+
+    let bestEdge = null;
+    movingPoints.forEach(orig => {
+      const rawTarget = { x: orig.x + dx, z: orig.z + dz };
+      targets.edges.forEach(seg => {
+        const cp = closestPointOnSegment2D(rawTarget, seg.a, seg.b);
+        const cdx = cp.x - orig.x, cdz = cp.z - orig.z;
+        const d = Math.hypot(cdx - dx, cdz - dz);
+        if (d < CONFIG.moveEdgeSnapTolerance && (!bestEdge || d < bestEdge.dist)) {
+          bestEdge = { dx: cdx, dz: cdz, dist: d, type: 'edge', massId: seg.massId };
+        }
+      });
+    });
+    return bestEdge;
   }
 
   function moveApplyDrag(curLocal) {
     const hit = moveState.downHit;
     const mass = masses.find(m => m.id === hit.massId);
     if (!mass) return;
+
     let dx = curLocal.x - moveState.dragStartLocal.x;
     let dz = curLocal.z - moveState.dragStartLocal.z;
     const original = moveState.dragOriginalPoints;
     let candidatePoints = original.map(p => ({ x: p.x, z: p.z }));
-    let movingIndices = [];
 
-    if (hit.type === 'vertex') {
-      const i = hit.pointIndex;
-      if (window.__shiftDown) {
-        const { prev, cur, next } = vertexNeighbors(original, i);
-        const dIn = unit(cur.x - prev.x, cur.z - prev.z), dOut = unit(next.x - cur.x, next.z - cur.z);
-        const c = constrainDelta([dIn, perp(dIn), dOut, perp(dOut)], dx, dz);
-        dx = c.x; dz = c.z;
+    // Implemented Normal or XY-Orthogonal tracking constraint when Shift key is pressed
+    if (window.__shiftDown) {
+      let normalDir = { x: 1, z: 0 };
+      if (hit.type === 'wall') {
+        normalDir = wallNormal2D(original, hit.edgeIndex);
+      } else if (hit.type === 'edge') {
+        const nA = wallNormal2D(original, hit.pointIndex);
+        const nB = wallNormal2D(original, (hit.pointIndex - 1 + original.length) % original.length);
+        normalDir = vNormalize({ x: nA.x + nB.x, y: 0, z: nA.z + nB.z });
       }
-      candidatePoints[i] = { x: original[i].x + dx, z: original[i].z + dz };
-      movingIndices = [i];
-    } else if (hit.type === 'wall') {
-      const i = hit.edgeIndex, n = original.length, j = (i + 1) % n;
-      if (window.__shiftDown) {
-        const along = unit(original[j].x - original[i].x, original[j].z - original[i].z);
-        const c = constrainDelta([along, perp(along)], dx, dz);
-        dx = c.x; dz = c.z;
-      }
-      candidatePoints[i] = { x: original[i].x + dx, z: original[i].z + dz };
-      candidatePoints[j] = { x: original[j].x + dx, z: original[j].z + dz };
-      movingIndices = [i, j];
-    } else if (hit.type === 'mass') {
-      if (window.__shiftDown) { if (Math.abs(dx) > Math.abs(dz)) dz = 0; else dx = 0; }
-      candidatePoints = original.map(p => ({ x: p.x + dx, z: p.z + dz }));
-      movingIndices = candidatePoints.map((_, idx) => idx);
+
+      // Candidate tracking rails: Normal Axis, Global Local X Axis, Global Local Z Axis
+      const choices = [
+        { x: normalDir.x, z: normalDir.z },
+        { x: 1, z: 0 },
+        { x: 0, z: 1 }
+      ];
+
+      let bestRail = choices[0];
+      let maxProj = -1;
+      choices.forEach(rail => {
+        const proj = Math.abs(dx * rail.x + dz * rail.z);
+        if (proj > maxProj) { maxProj = proj; bestRail = rail; }
+      });
+
+      const finalProj = dx * bestRail.x + dz * bestRail.z;
+      dx = bestRail.x * finalProj;
+      dz = bestRail.z * finalProj;
     }
 
-    // magnetic snapping to other volumes (Shift already means "precise manual
-    // control", so skip snapping while it's held to avoid the two fighting)
+    // Object-to-object snapping: whole volume / face / edge all try to lock
+    // onto another mass's vertices or edges (faces, in plan) when close enough.
+    let snapped = false;
+    let snapSourceMassId = null;
     if (!window.__shiftDown) {
-      const vertexTargets = collectSnapVertices(mass.id);
-      const edgeSegments = collectSnapEdges(mass.id);
-      const movingPts = movingIndices.map(idx => candidatePoints[idx]);
-      const adj = bestSnapAdjustment(mass, movingPts, vertexTargets, edgeSegments, CONFIG.snapPx);
-      if (adj) {
-        movingIndices.forEach(idx => {
-          candidatePoints[idx] = { x: candidatePoints[idx].x + adj.dx, z: candidatePoints[idx].z + adj.dz };
-        });
+      let movingPoints;
+      if (hit.type === 'edge') {
+        movingPoints = [original[hit.pointIndex]];
+      } else if (hit.type === 'wall') {
+        const i = hit.edgeIndex, n = original.length, j = (i + 1) % n;
+        movingPoints = [original[i], original[j]];
+      } else {
+        movingPoints = original;
       }
+      const snapResult = findMoveSnap(mass.plane, mass.id, movingPoints, dx, dz);
+      if (snapResult) {
+        dx = snapResult.dx; dz = snapResult.dz;
+        snapped = true; snapSourceMassId = snapResult.massId;
+      }
+    }
+
+    moveState.snapSourceMassId = snapSourceMassId;
+    if (moveState.snapSourceMassId !== moveState._prevSnapSourceMassId) {
+      if (moveState._prevSnapSourceMassId !== null) setMassTint(moveState._prevSnapSourceMassId, COLORS.massFill);
+      if (moveState.snapSourceMassId !== null) setMassTint(moveState.snapSourceMassId, COLORS.massFillSelected);
+      moveState._prevSnapSourceMassId = moveState.snapSourceMassId;
+    }
+
+    if (hit.type === 'edge') {
+      // Moves JUST a single vertical edge column
+      const i = hit.pointIndex;
+      candidatePoints[i] = { x: original[i].x + dx, z: original[i].z + dz };
+    } else if (hit.type === 'wall') {
+      // Moves full side wall face (translating both bounding vertices equally)
+      const i = hit.edgeIndex, n = original.length, j = (i + 1) % n;
+      candidatePoints[i] = { x: original[i].x + dx, z: original[i].z + dz };
+      candidatePoints[j] = { x: original[j].x + dx, z: original[j].z + dz };
+    } else if (hit.type === 'mass') {
+      // Translates top/bottom whole face (translates the entire mass profile)
+      candidatePoints = original.map(p => ({ x: p.x + dx, z: p.z + dz }));
     }
 
     if (isSimplePolygon(candidatePoints)) {
       mass.points = candidatePoints;
       rebuildMassGeometry(mass);
+     
+      // Update real-time visualization highlights
+      if (hit.type === 'wall') {
+        showFaceHighlight(mass.id, f => f.type === 'wall' && f.edgeIndex === hit.edgeIndex, wallOutwardNormal3D(mass, hit.edgeIndex));
+      } else if (hit.type === 'edge') {
+        showVerticalEdgeHighlight(mass, hit.pointIndex);
+      } else {
+        showFaceHighlight(mass.id, f => f.type === 'top', mass.plane.normal);
+      }
       setHudValid(true);
+      showHud(snapped ? 'Displacement (snapped)' : 'Displacement', Math.hypot(dx, dz).toFixed(2), false);
     } else {
       setHudValid(false);
     }
@@ -1086,10 +1189,24 @@
   }
 
   /* ============================================================
-     PUSH / PULL MODE
+     PUSH / PULL MODE (RE-ENGINEERED FOR STRICT HOVER EXTRUSION ONLY)
      ============================================================ */
-  function pushPullEnter() { setStatus('Click and drag any face to push or pull it. Type a number for an exact distance.'); }
-  function pushPullExit() { ppState.active = false; ppState.dragging = false; ppState.typed = ''; hideHud(); }
+  function pushPullEnter() { setStatus('Click and drag any face to perform a clean, uniform extension/retraction extrusion.'); }
+  function pushPullExit() {
+    ppState.active = false; ppState.dragging = false; ppState.typed = '';
+    ppState.snapSourceMassId = null; ppState._prevSnapSourceMassId = null;
+    hideFaceHighlight();
+    hideHud();
+    syncAllViews();
+  }
+
+  function pushPullFaceHighlight(mass) {
+    if (ppState.faceType === 'wall') {
+      showFaceHighlight(mass.id, f => f.type === 'wall' && f.edgeIndex === ppState.edgeIndex, { x: ppState.normal.x, y: ppState.normal.y, z: ppState.normal.z });
+    } else {
+      showFaceHighlight(mass.id, f => f.type === ppState.faceType, { x: ppState.normal.x, y: ppState.normal.y, z: ppState.normal.z });
+    }
+  }
 
   function pushPullBegin(faceHit) {
     const mass = masses.find(m => m.id === faceHit.massId);
@@ -1101,14 +1218,41 @@
     ppState.originalDepth = mass.depth;
     ppState.originalPlaneOrigin = { ...mass.plane.origin };
     ppState.typed = ''; ppState.liveDelta = 0;
+    ppState.snapSourceMassId = null; ppState._prevSnapSourceMassId = null;
 
     if (faceHit.type === 'top') ppState.normal = new THREE.Vector3(mass.plane.normal.x, mass.plane.normal.y, mass.plane.normal.z);
     else if (faceHit.type === 'bottom') ppState.normal = new THREE.Vector3(-mass.plane.normal.x, -mass.plane.normal.y, -mass.plane.normal.z);
     else { const n = wallOutwardNormal3D(mass, faceHit.edgeIndex); ppState.normal = new THREE.Vector3(n.x, n.y, n.z); }
+
+    setMassTint(mass.id, COLORS.massFillSelected);
+    pushPullFaceHighlight(mass);
+  }
+
+  function snapPushPullDelta(mass, rawDelta) {
+    const axisN = { x: ppState.normal.x, y: ppState.normal.y, z: ppState.normal.z };
+    const refWorld = { x: ppState.origin.x, y: ppState.origin.y, z: ppState.origin.z };
+    const constantAtZero = vDot(refWorld, axisN);
+    let best = null, bestDiff = Infinity, bestMassId = null;
+    masses.forEach(m => {
+      if (m.id === mass.id) return;
+      m.points.forEach(p => {
+        [0, m.depth].forEach(extra => {
+          const w = planeToWorld(m.plane, p.x, p.z, extra);
+          const T = vDot(w, axisN);
+          const neededDelta = T - constantAtZero;
+          const diff = Math.abs(neededDelta - rawDelta);
+          if (diff < bestDiff) { bestDiff = diff; best = neededDelta; bestMassId = m.id; }
+        });
+      });
+    });
+    if (best !== null && bestDiff < CONFIG.pushPullSnapTolerance) return { delta: best, snapped: true, sourceMassId: bestMassId };
+    return { delta: rawDelta, snapped: false, sourceMassId: null };
   }
 
   function pushPullUpdate() {
     if (!ppState.active) return;
+    const mass = masses.find(m => m.id === ppState.massId);
+    if (!mass) return;
     const camDir = new THREE.Vector3(); camera.getWorldDirection(camDir);
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir, ppState.origin);
     raycaster.setFromCamera(mouseNDC, camera);
@@ -1118,15 +1262,30 @@
     ppState.liveDelta = delta;
 
     let applyDelta = delta;
-    const label = (ppState.faceType === 'top' || ppState.faceType === 'bottom') ? 'Height' : 'Offset';
+    let snapped = false, snapSource = null;
+    const label = (ppState.faceType === 'top' || ppState.faceType === 'bottom') ? 'Height' : 'Extrusion';
     if (ppState.typed) {
       const v = parseFloat(ppState.typed);
       if (!isNaN(v)) applyDelta = v * (delta < 0 ? -1 : 1);
     } else {
-      applyDelta = snap(delta, CONFIG.gridSnap);
+      const snapResult = snapPushPullDelta(mass, delta);
+      if (snapResult.snapped) {
+        applyDelta = snapResult.delta; snapped = true; snapSource = snapResult.sourceMassId;
+      } else {
+        applyDelta = snap(delta, CONFIG.gridSnap);
+      }
     }
+
+    ppState.snapSourceMassId = snapSource;
+    if (ppState.snapSourceMassId !== ppState._prevSnapSourceMassId) {
+      if (ppState._prevSnapSourceMassId !== null) setMassTint(ppState._prevSnapSourceMassId, COLORS.massFill);
+      if (ppState.snapSourceMassId !== null) setMassTint(ppState.snapSourceMassId, COLORS.massFillSelected);
+      ppState._prevSnapSourceMassId = ppState.snapSourceMassId;
+    }
+
     applyPushPull(applyDelta);
-    showHud(label, ppState.typed || Math.abs(applyDelta).toFixed(2), null);
+    pushPullFaceHighlight(mass);
+    showHud(snapped ? label + ' (snapped)' : label, ppState.typed || Math.abs(applyDelta).toFixed(2), null);
   }
 
   function applyPushPull(delta) {
@@ -1149,14 +1308,66 @@
       rebuildMassGeometry(mass);
       setHudValid(true);
     } else {
-      const i = ppState.edgeIndex, len = ppState.originalPoints.length, j = (i + 1) % len;
-      const n2d = wallNormal2D(ppState.originalPoints, i);
-      const candidate = ppState.originalPoints.map(p => ({ x: p.x, z: p.z }));
-      candidate[i] = { x: ppState.originalPoints[i].x + n2d.x * delta, z: ppState.originalPoints[i].z + n2d.z * delta };
-      candidate[j] = { x: ppState.originalPoints[j].x + n2d.x * delta, z: ppState.originalPoints[j].z + n2d.z * delta };
-      if (isSimplePolygon(candidate)) { mass.points = candidate; rebuildMassGeometry(mass); setHudValid(true); }
-      else setHudValid(false);
+
+    const idx = ppState.edgeIndex;
+    const count = ppState.originalPoints.length;
+
+    const a = ppState.originalPoints[idx];
+    const b = ppState.originalPoints[(idx + 1) % count];
+
+    const n2d = wallNormal2D(ppState.originalPoints, idx);
+
+    const offsetX = n2d.x * delta;
+    const offsetZ = n2d.z * delta;
+
+    const a2 = {
+        x: a.x + offsetX,
+        z: a.z + offsetZ
+    };
+
+    const b2 = {
+        x: b.x + offsetX,
+        z: b.z + offsetZ
+    };
+
+    const candidate = [];
+
+    for (let i = 0; i < count; i++) {
+
+        candidate.push({
+            x: ppState.originalPoints[i].x,
+            z: ppState.originalPoints[i].z
+        });
+
+        if (i === idx) {
+
+            candidate.push({
+                x: a2.x,
+                z: a2.z
+            });
+
+            candidate.push({
+                x: b2.x,
+                z: b2.z
+            });
+
+        }
     }
+
+    if (isSimplePolygon(candidate)) {
+
+        mass.points = candidate;
+
+        rebuildMassGeometry(mass);
+
+        setHudValid(true);
+
+    } else {
+
+        setHudValid(false);
+
+    }
+}
   }
 
   function pushPullCommit() {
@@ -1171,7 +1382,10 @@
     );
     mass.points = finalData.points; mass.depth = finalData.depth; mass.plane = finalData.plane;
     ppState.active = false; ppState.dragging = false; ppState.typed = '';
+    ppState.snapSourceMassId = null; ppState._prevSnapSourceMassId = null;
+    hideFaceHighlight();
     hideHud();
+    syncAllViews();
     updateHistoryButtons();
   }
 
@@ -1217,7 +1431,7 @@
   }
 
   /* ============================================================
-     INPUT WIRING
+     INPUT INTERACTION WIRING
      ============================================================ */
   function onPointerDown(e) {
     if (e.button === 1) {
@@ -1232,21 +1446,26 @@
     if (mode === 'draw') { drawPointerMove(); drawClick(); return; }
 
     if (mode === 'move') {
+      // First, check if user is targeting a vertical edge corner handle column
       const handle = nearestVertexOnScreen(CONFIG.vertexSnapPx, null);
       let raw = null;
-      if (handle) raw = { type: 'vertex', massId: handle.massId, pointIndex: handle.pointIndex };
-      else {
+      if (handle) {
+        raw = { type: 'edge', massId: handle.massId, pointIndex: handle.pointIndex };
+      } else {
         const face = pickFace();
         if (face && face.type === 'wall') raw = { type: 'wall', massId: face.massId, edgeIndex: face.edgeIndex };
-        else if (face) raw = { type: 'mass', massId: face.massId };
+        else if (face) raw = { type: 'mass', massId: face.massId }; // Top or bottom face moves full mesh profile
       }
-      // sub-element editing (vertex/wall) is only available on the mass
-      // that's already selected — any first touch on a different/unselected
-      // mass always grabs the whole thing (and selects it).
+
       let downHit = null;
-      if (raw) downHit = (raw.massId === moveState.selectedMassId) ? raw : { type: 'mass', massId: raw.massId };
+      if (raw) {
+        // If an object isn't active/selected yet, any mouse click selects it and defaults interaction to whole shape movement
+        downHit = (raw.massId === moveState.selectedMassId) ? raw : { type: 'mass', massId: raw.massId };
+      }
+     
       moveState.downHit = downHit;
       moveState.dragging = false;
+
       if (downHit) {
         const mass = masses.find(m => m.id === downHit.massId);
         moveState.dragPlane = mass.plane;
@@ -1255,8 +1474,17 @@
         moveState.dragStartScreen = { x: e.clientX, y: e.clientY };
         moveState.dragOriginalPoints = mass.points.map(p => ({ x: p.x, z: p.z }));
         selectMass(downHit.massId);
+       
+        if (downHit.type === 'wall') {
+          showFaceHighlight(mass.id, f => f.type === 'wall' && f.edgeIndex === downHit.edgeIndex, wallOutwardNormal3D(mass, downHit.edgeIndex));
+        } else if (downHit.type === 'edge') {
+          showVerticalEdgeHighlight(mass, downHit.pointIndex);
+        } else {
+          showFaceHighlight(mass.id, f => f.type === 'top', mass.plane.normal);
+        }
       } else {
         selectMass(null);
+        hideFaceHighlight();
       }
       return;
     }
@@ -1329,6 +1557,11 @@
       }
       moveState.downHit = null;
       moveState.dragging = false;
+      moveState.snapSourceMassId = null;
+      moveState._prevSnapSourceMassId = null;
+      hideFaceHighlight();
+      hideHud();
+      syncAllViews();
     }
 
     if (mode === 'pushpull' && ppState.active) pushPullCommit();
@@ -1383,7 +1616,7 @@
   function onKeyUp(e) { if (e.key === 'Shift') window.__shiftDown = false; }
 
   /* ============================================================
-     INIT
+     INITIALIZATION SETUP
      ============================================================ */
   function buildGrid() {
     const size = 200, divisions = 200;
