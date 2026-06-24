@@ -165,10 +165,10 @@
         </svg>
         Push/Pull
       </button>
-      <button class="tool" data-mode="split" disabled title="Split faces — coming in the next pass">
+      <button class="tool" data-mode="split" title="Split — click a wall face then click to place a vertical split line">
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <rect x="4" y="4" width="12" height="12" rx="0.5"/>
-          <path d="M4 13 L16 7" stroke-dasharray="1.6 2"/>
+          <path d="M10 4 L10 16"/>
         </svg>
         Split
       </button>
@@ -308,6 +308,15 @@
     typed: '', liveDelta: 0,
     downScreen: null,
     snapSourceMassId: null, _prevSnapSourceMassId: null,
+  };
+
+  const splitState = {
+    phase: 'hover', // 'hover' | 'placing'
+    massId: null,
+    edgeIndex: null,
+    snapT: null,     // 0..1 along the edge
+    snapU: null,     // world-units from edge start
+    splitLine: null, // THREE.Line visual
   };
 
   let undoStack = [], redoStack = [];
@@ -1390,6 +1399,149 @@
   }
 
   /* ============================================================
+     SPLIT MODE
+     ============================================================ */
+  function splitEnter() {
+    splitState.phase = 'hover';
+    splitState.massId = null; splitState.edgeIndex = null;
+    splitState.snapT = null; splitState.snapU = null;
+    clearSplitLine(); hideFaceHighlight(); hideHud();
+    setStatus('Hover a wall face to select it, then click to lock. Move along the face and click to place the split.');
+  }
+  function splitExit() {
+    splitState.phase = 'hover';
+    splitState.massId = null; splitState.edgeIndex = null;
+    splitState.snapT = null; splitState.snapU = null;
+    clearSplitLine(); hideFaceHighlight(); hideHud();
+  }
+
+  function clearSplitLine() {
+    if (splitState.splitLine) {
+      scene.remove(splitState.splitLine);
+      splitState.splitLine.geometry.dispose();
+      splitState.splitLine.material.dispose();
+      splitState.splitLine = null;
+    }
+  }
+
+  function drawSplitLine(bot, top, outward) {
+    clearSplitLine();
+    const off = 0.025;
+    const b = new THREE.Vector3(bot.x + outward.x * off, bot.y + outward.y * off, bot.z + outward.z * off);
+    const t = new THREE.Vector3(top.x + outward.x * off, top.y + outward.y * off, top.z + outward.z * off);
+    const geo = new THREE.BufferGeometry().setFromPoints([b, t]);
+    splitState.splitLine = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: COLORS.accent }));
+    splitState.splitLine.renderOrder = 11;
+    scene.add(splitState.splitLine);
+  }
+
+  function splitPointerMove() {
+    if (splitState.phase === 'hover') {
+      const face = pickFace();
+      if (face && face.type === 'wall') {
+        const mass = masses.find(m => m.id === face.massId);
+        showFaceHighlight(face.massId, f => f.type === 'wall' && f.edgeIndex === face.edgeIndex, wallOutwardNormal3D(mass, face.edgeIndex));
+        splitState.massId = face.massId;
+        splitState.edgeIndex = face.edgeIndex;
+      } else {
+        hideFaceHighlight();
+        splitState.massId = null; splitState.edgeIndex = null;
+      }
+      clearSplitLine(); hideHud();
+      return;
+    }
+
+    if (splitState.phase === 'placing') {
+      const mass = masses.find(m => m.id === splitState.massId);
+      if (!mass) return;
+      const i = splitState.edgeIndex;
+      const j = (i + 1) % mass.points.length;
+      const pi = planeToWorld(mass.plane, mass.points[i].x, mass.points[i].z, 0);
+      const pj = planeToWorld(mass.plane, mass.points[j].x, mass.points[j].z, 0);
+      const edgeDir = vNormalize(vSub(pj, pi));
+      const edgeLen = Math.hypot(pj.x - pi.x, pj.y - pi.y, pj.z - pi.z);
+      const outward = wallOutwardNormal3D(mass, i);
+
+      // intersect mouse ray with the wall plane (whose normal faces outward)
+      const wallOrigin = { x: pi.x, y: pi.y, z: pi.z };
+      const wallPlaneObj = { origin: wallOrigin, normal: outward };
+      const hit = intersectMousePlane(wallPlaneObj);
+      if (!hit) return;
+
+      // project onto edge direction to find distance from edge start
+      const dFromStart = vDot(vSub(hit, pi), edgeDir);
+      let snappedU = snap(dFromStart, CONFIG.gridSnap);
+      const margin = CONFIG.minEdgeLength;
+      snappedU = Math.max(margin, Math.min(edgeLen - margin, snappedU));
+      const t = snappedU / edgeLen;
+
+      splitState.snapT = t;
+      splitState.snapU = snappedU;
+
+      // world position of the split at bottom and top of the wall
+      const botW = { x: pi.x + edgeDir.x * snappedU, y: pi.y + edgeDir.y * snappedU, z: pi.z + edgeDir.z * snappedU };
+      const topW = {
+        x: botW.x + mass.plane.normal.x * mass.depth,
+        y: botW.y + mass.plane.normal.y * mass.depth,
+        z: botW.z + mass.plane.normal.z * mass.depth,
+      };
+      drawSplitLine(botW, topW, outward);
+      // keep the wall face highlighted while placing
+      showFaceHighlight(mass.id, f => f.type === 'wall' && f.edgeIndex === i, outward);
+      showHud('Split offset', snappedU.toFixed(2), false);
+    }
+  }
+
+  function splitClick() {
+    if (splitState.phase === 'hover') {
+      if (splitState.massId !== null && splitState.edgeIndex !== null) {
+        splitState.phase = 'placing';
+        setStatus('Move along the face to position the split line — click to confirm. Esc to cancel.');
+      }
+      return;
+    }
+
+    if (splitState.phase === 'placing') {
+      if (splitState.snapT === null) return;
+      const mass = masses.find(m => m.id === splitState.massId);
+      if (!mass) return;
+
+      const i = splitState.edgeIndex;
+      const j = (i + 1) % mass.points.length;
+      const pi = mass.points[i], pj = mass.points[j];
+      const t = splitState.snapT;
+
+      const newPt = {
+        x: pi.x + (pj.x - pi.x) * t,
+        z: pi.z + (pj.z - pi.z) * t,
+      };
+
+      // Insert new vertex between i and j
+      const newPoints = [
+        ...mass.points.slice(0, i + 1),
+        newPt,
+        ...mass.points.slice(i + 1),
+      ];
+
+      if (!isSimplePolygon(newPoints)) {
+        flashStatus("Can't split there — shape would become invalid.", true);
+        return;
+      }
+
+      pushUndo();
+      mass.points = newPoints;
+      rebuildMassGeometry(mass);
+
+      // Reset for next split on same or another face
+      splitState.phase = 'hover';
+      splitState.massId = null; splitState.edgeIndex = null;
+      splitState.snapT = null; splitState.snapU = null;
+      clearSplitLine(); hideFaceHighlight(); hideHud();
+      setStatus('Wall split! Hover another wall face to split again.');
+    }
+  }
+
+  /* ============================================================
      UI / HUD
      ============================================================ */
   function setStatus(text) { dom.statusText.textContent = text; dom.statusText.classList.remove('status--danger'); }
@@ -1415,18 +1567,19 @@
   function hideHud() { dom.hud.classList.remove('hud--visible'); }
   function showEmptyState() { dom.emptyState.classList.add('empty--visible'); }
   function hideEmptyState() { dom.emptyState.classList.remove('empty--visible'); }
-  function updateCursor() { canvas.style.cursor = mode === 'draw' ? 'crosshair' : mode === 'pushpull' ? 'ns-resize' : 'default'; }
+  function updateCursor() { canvas.style.cursor = mode === 'draw' ? 'crosshair' : mode === 'pushpull' ? 'ns-resize' : mode === 'split' ? 'crosshair' : 'default'; }
 
   function setMode(newMode) {
-    if (newMode === 'split') return;
     if (mode === 'draw') drawExit();
     if (mode === 'move') moveExit();
     if (mode === 'pushpull') pushPullExit();
+    if (mode === 'split') splitExit();
     mode = newMode;
     [...dom.toolButtons].forEach(b => b.classList.toggle('tool--active', b.dataset.mode === mode));
     if (mode === 'draw') drawEnter();
     if (mode === 'move') moveEnter();
     if (mode === 'pushpull') pushPullEnter();
+    if (mode === 'split') splitEnter();
     updateCursor();
   }
 
@@ -1493,6 +1646,8 @@
       const face = pickFace();
       if (face) { pushPullBegin(face); ppState.downScreen = { x: e.clientX, y: e.clientY }; }
     }
+
+    if (mode === 'split') { splitPointerMove(); splitClick(); }
   }
 
   function onPointerMove(e) {
@@ -1537,6 +1692,8 @@
       pushPullUpdate();
       return;
     }
+
+    if (mode === 'split') { splitPointerMove(); }
   }
 
   function onPointerUp() {
@@ -1579,6 +1736,13 @@
 
     if (e.key === 'Escape') {
       if (mode === 'draw') drawEnter();
+      if (mode === 'split' && splitState.phase === 'placing') {
+        splitState.phase = 'hover';
+        splitState.snapT = null; splitState.snapU = null;
+        clearSplitLine(); hideFaceHighlight(); hideHud();
+        setStatus('Hover a wall face to select it, then click to lock. Move along the face and click to place the split.');
+        return;
+      }
       if (mode === 'pushpull' && ppState.active) {
         const mass = masses.find(m => m.id === ppState.massId);
         if (mass) {
